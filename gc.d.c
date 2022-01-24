@@ -8,7 +8,11 @@
 #include "trie.h"
 #undef NODEBUG
 
-// Macros for trie functions (see trie.h)
+/*
+Macros for trie functions (see trie.h). The three least significant bits of
+pointers are zero. A value in the trie must have the LSB clear. Thus can shift
+right by two bits. The LSB of the result is still zero.
+*/
 #define tr_insert(t, x) trie_insert(t, (uint64_t)(x) >> 2, 0)
 #define tr_contains(t, x) trie_contains(t, (uint64_t)(x) >> 2, 0)
 #define tr_remove(t, x) trie_remove(t, (uint64_t)(x) >> 2, 0)
@@ -18,10 +22,10 @@
 
 /*
 The user sees the "object" member within the allocation structure. This macro
-computes the address of thhe allocation object given the address of the user
+computes the address of the allocation object given the address of the user
 object.
 */
-#define allocation_offset(o) ((Allocation*)((char*)(o) - offsetof(Allocation, object)))
+#define allocation_address(o) ((Allocation*)((char*)(o) - offsetof(Allocation, object)))
 
 typedef struct Type Type
 typedef struct Allocation Allocation
@@ -30,7 +34,7 @@ void collect(void)
 
 /*
 Type describes an object in terms of its size and in terms of the offsets of
-pointers to dynamically allocated memory that it contains.
+pointers to dynamically allocated (and managed) memory that it contains.
 */
 struct Type
     int size // byte size of an object of this type
@@ -51,13 +55,16 @@ struct Allocation
     Type* type // type of the user object or NULL
     char object[] // <-- user object starts here
 
-// A trie of all allocations.
+// The trie of all allocations.
 uint64_t allocations = 0
 
-// A trie of root allocations.
+// The trie of root allocations.
 uint64_t roots = 0
 
-// The bottom of the call stack is set in the main function. Need for scanning the stack.
+/*
+The bottom of the call stack is set in the main function. Needed for scanning
+the stack.
+*/
 uint64_t* bottom_of_stack
 
 // Allocates the given number of bytes.
@@ -81,6 +88,7 @@ void* gc_alloc(int size)
 void* gc_alloc_object(Type* type)
     require_not_null(type)
     Allocation* a = calloc(1, sizeof(Allocation) + type->size)
+    // collect() // stress test collection
     if a == NULL do
         // if could not get memory, collect and try again
         collect()
@@ -115,20 +123,20 @@ void* gc_alloc_array(Type* type, int count)
 // Checks if the set of roots contains o.
 bool contains_root(void* o)
     require_not_null(o)
-    Allocation* a = allocation_offset(o)
+    Allocation* a = allocation_address(o)
     return tr_contains(roots, a)
 
 // Adds an object as a root object.
 void add_root(void* o)
     require_not_null(o)
-    Allocation* a = allocation_offset(o)
+    Allocation* a = allocation_address(o)
     tr_insert(&roots, a)
     ensure("is a root", tr_contains(roots, a))
 
 // Removes an object from the set of root objects.
 void remove_root(void* o)
     require_not_null(o)
-    Allocation* a = allocation_offset(o)
+    Allocation* a = allocation_address(o)
     tr_remove(&roots, a)
     ensure("is not a root", !tr_contains(roots, a))
 
@@ -148,7 +156,8 @@ void print_allocations(void)
 Allocates a new type with the given size of the user object and the given number
 of pointers to dynamically allocated content that is managed by the garbage
 collector. Type itself is dynamically allocated, but not garbage collected. The
-size should respect the requirements of alignment, if used with arrays.
+size should respect the requirements of alignment, if used with arrays. The
+pointer table is initialized to zeros.
 */
 Type* new_type(int size, int pointer_count)
     require("not negative", size >= 0)
@@ -162,7 +171,7 @@ Type* new_type(int size, int pointer_count)
 void type_set_offset(Type* type, int index, int offset)
     require_not_null(type)
     require("valid index", 0 <= index && index < type->pointer_count)
-    require("not negative", offset >= 0)
+    require("valid offset", 0 <= offset && offset + sizeof(void*) <= type->size)
     type->pointers[index] = offset
 
 /*
@@ -173,18 +182,18 @@ bool f_sweep(uint64_t x)
     Allocation* a = (Allocation*)(x << 2)
     if a->marked do
         a->marked = false
-        return true
+        return true // keep
     else
-        printf("free %p\n", a)
+        PLf("free %p", a)
         free(a)
-        return false
+        return false // remove
 void sweep(void)
     trie_visit(&allocations, f_sweep)
 
 // Marks all objects reachable from o, including o itself.
-void mark(void* o)
+void mark(void* o) // todo: should call with allocation as argument?
     assert_not_null(o)
-    Allocation* a = allocation_offset(o)
+    Allocation* a = allocation_address(o)
     PLf("marking o = %p, a = %p, count = %d, marked = %d", o, a, a->count, a->marked)
     if a->marked do return
     a->marked = true
@@ -207,7 +216,7 @@ void mark(void* o)
 bool f_mark_roots(uint64_t x)
     Allocation* r = (Allocation*)(x << 2)
     mark(r->object)
-    return true
+    return true // keep
 void mark_roots(void)
     trie_visit(&roots, f_mark_roots)
 
@@ -227,12 +236,13 @@ void mark_stack(void)
         // is the value on the stack at address p a valid allocation?
         // if so, the stack contains the user part, need to subtract
         // offset of object in Allocation
-        Allocation* a = allocation_offset(*p)
+        Allocation* a = allocation_address(*p)
         uint64_t x = (uint64_t)a
-        if x != 0 && x != 0xfffffffffffffff0 && (x & 0x7) == 0 do 
+        if x != 0 && x != 0xfffffffffffffff0 && (x & 7) == 0 do 
             bool is_allocation = tr_contains(allocations, a)
             PLf("p = %p, a = %p, is alloc = %d", p, a, is_allocation)
-            if is_allocation do a->marked = true
+            if is_allocation do
+                mark(a->object)
 
 /*
 Called when it is necessary to collect garbage. The stack is automatically
@@ -256,14 +266,14 @@ char* new_str(char* s)
 
 /*
 Example type that contains one pointer to managed memory (t). The other pointer
-(s) is not relevant, because it points to memory that is not dynamically
-allocated.
+(s) is not relevant, because it is supposed to point to memory that is not
+managed by the garbage collector.
 */
 typedef struct A A
 struct A
     int i
-    char* s // not dynamically allocated
-    char* t // dynamically allocated
+    char* s // not managed
+    char* t // managed
 
 // A needs a type, bacause it contains one pointer to managed memory (t).
 Type* make_a_type(void)
@@ -293,7 +303,7 @@ void print_a(A* a)
 typedef struct B B
 struct B
     int j
-    A* a
+    A* a // managed
 
 // B needs a type, bacause it contains one pointer to managed memory (a).
 Type* make_b_type(void)
@@ -320,8 +330,8 @@ void print_b(B* b)
 typedef struct Node Node
 struct Node
     int i
-    Node* left
-    Node* right
+    Node* left // managed
+    Node* right // managed
 
 Type* make_node_type(void)
     Type* type = new_type(sizeof(Node), 2)
@@ -333,7 +343,9 @@ Type* node_type
 
 Node* node(int i, Node* left, Node* right)
     Node* node = gc_alloc_object(node_type)
+    // collect() // stress test collection
     node->i = i
+    PLi(i)
     node->left = left
     node->right = right
     return node
@@ -343,7 +355,7 @@ Node* leaf(int i)
 
 void print_tree(Node* t)
     if t != NULL do
-        printf("o = %p, a = %p, %d\n", t, allocation_offset(t), t->i)
+        printf("o = %p, a = %p, i = %d\n", t, allocation_address(t), t->i)
         print_tree(t->left)
         print_tree(t->right)
 
@@ -377,8 +389,8 @@ void test0(void)
     sweep(); print_allocations()
 
     B* bs = gc_alloc_array(b_type, 3)
-    Allocation* al = allocation_offset(bs)
-    printf("%p, %p\n", al, allocation_offset(a1))
+    Allocation* al = allocation_address(bs)
+    printf("%p, %p\n", al, allocation_address(a1))
     PLi(al->count)
     PLi(al->type->pointer_count)
     for int i = 0; i < 3; i++ do
@@ -395,12 +407,22 @@ void test0(void)
 
 int tree_sum(void)
     Node* t = node(1, node(2, leaf(3), leaf(4)), node(5, leaf(6), leaf(7)))
-    add_root(t)
+    // add_root(t)
     int n = sum_tree(t)
-    remove_root(t)
+    // remove_root(t)
     return n
 
 void test(void)
+    node_type = make_node_type()
+    printf("node_type = %p\n", node_type)
+    int n = tree_sum()
+    printf("n = %d\n", n)
+    assert("correct sum", n == 1+2+3+4+5+6+7)
+    collect()
+    print_allocations()
+    free(node_type)
+
+void test2(void)
     node_type = make_node_type()
     printf("node_type = %p\n", node_type)
     //Node* t = NULL
@@ -432,8 +454,51 @@ void test(void)
     print_allocations()
     free(node_type)
 
+void test_alignment(void)
+    // test address alignment on the stack
+    assert("aligned pointer", (*bottom_of_stack & 7) == 0)
+    assert("valid pointer size", sizeof(uint64_t) == sizeof(void*))
+
+    char* s = "x"
+    char c = 1
+    char d = 2
+    char* t = "t"
+    assert("", ((uint64_t)&s & 0x7) == 0)
+    assert("", ((uint64_t)&t & 0x7) == 0)
+    assert("", (uint64_t)&s - (uint64_t)&t == 0x10)
+    PLf("&s = %p, &c = %p, &d = %p, &t = %p, %llu", 
+        &s, &c, &d, &t, (uint64_t)&c - (uint64_t)&t)
+
+    int i = 1
+    char e = 2
+    int j = 3
+    assert("", ((uint64_t)&i & 0x3) == 0)
+    assert("", ((uint64_t)&j & 0x3) == 0)
+    assert("", (uint64_t)&i - (uint64_t)&j == 8)
+    PLf("&i = %p, &e = %p, &j = %p, %llu", 
+        &i, &e, &j, (uint64_t)&i - (uint64_t)&j)
+
+    short f = 1
+    char g = 2
+    short h = 3
+    assert("", ((uint64_t)&f & 0x1) == 0)
+    assert("", ((uint64_t)&h & 0x1) == 0)
+    assert("", (uint64_t)&f - (uint64_t)&h == 4)
+    PLf("&f = %p, &g = %p, &h = %p, %llu", 
+        &f, &g, &h, (uint64_t)&f - (uint64_t)&h)
+
+    double k = 1
+    char l = 2
+    double m = 3
+    assert("", ((uint64_t)&k & 0x7) == 0)
+    assert("", ((uint64_t)&m & 0x7) == 0)
+    assert("", (uint64_t)&k - (uint64_t)&m == 0x10)
+    PLf("&k = %p, &l = %p, &m = %p, %llu", 
+        &k, &l, &m, (uint64_t)&k - (uint64_t)&m)
+
 int main(int argc, char* argv[])
     bottom_of_stack = (uint64_t*)&argv
     assert("aligned pointer", (*bottom_of_stack & 7) == 0)
     test()
+    test_alignment()
     return 0
