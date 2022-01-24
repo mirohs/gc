@@ -191,10 +191,9 @@ void sweep(void)
     trie_visit(&allocations, f_sweep)
 
 // Marks all objects reachable from o, including o itself.
-void mark(void* o) // todo: should call with allocation as argument?
-    assert_not_null(o)
-    Allocation* a = allocation_address(o)
-    PLf("marking o = %p, a = %p, count = %d, marked = %d", o, a, a->count, a->marked)
+void mark(Allocation* a) // todo: should call with allocation as argument?
+    assert_not_null(a)
+    PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
     if a->marked do return
     a->marked = true
     Type* t = a->type
@@ -209,13 +208,14 @@ void mark(void* o) // todo: should call with allocation as argument?
         for int j = 0; j < m; j++ do // for each pointer in i-th element
             int p = pointers[j]
             char* pj = *(char**)(element + p)
-            if pj != NULL do mark(pj)
+            if pj != NULL do
+                mark(allocation_address(pj))
         element += element_size
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)
     Allocation* r = (Allocation*)(x << 2)
-    mark(r->object)
+    mark(r)
     return true // keep
 void mark_roots(void)
     trie_visit(&roots, f_mark_roots)
@@ -242,7 +242,7 @@ void mark_stack(void)
             bool is_allocation = tr_contains(allocations, a)
             PLf("p = %p, a = %p, is alloc = %d", p, a, is_allocation)
             if is_allocation do
-                mark(a->object)
+                mark(a)
 
 /*
 Called when it is necessary to collect garbage. The stack is automatically
@@ -343,7 +343,7 @@ Type* node_type
 
 Node* node(int i, Node* left, Node* right)
     Node* node = gc_alloc_object(node_type)
-    // collect() // stress test collection
+    collect() // stress test collection
     node->i = i
     PLi(i)
     node->left = left
@@ -399,7 +399,7 @@ void test0(void)
         bi->a = a1
         print_b(bi)
     print_allocations()
-    mark(bs)
+    mark(allocation_address(bs))
     print_allocations()
 
     free(a_type)
