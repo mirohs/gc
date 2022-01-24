@@ -6,19 +6,20 @@
 #include <setjmp.h>
 #include "util.h"
 #include "trie.h"
+#include "gc.h"
 #undef NODEBUG
 
 /*
 Macros for trie functions (see trie.h). The three least significant bits of
-pointers are zero. A value in the trie must have the LSB clear. Thus can shift
-right by two bits. The LSB of the result is still zero.
+pointers are zero. A value in the trie must have the LSB clear. Thus can be
+shifted right by two bits. The LSB of the result is still zero.
 */
 #define tr_insert(t, x) trie_insert(t, (uint64_t)(x) >> 2, 0)
 #define tr_contains(t, x) trie_contains(t, (uint64_t)(x) >> 2, 0)
 #define tr_remove(t, x) trie_remove(t, (uint64_t)(x) >> 2, 0)
 
 // Gets the offset of a struct member.
-#define offsetof(type, member) ((int)__builtin_offsetof(type, member))
+*#define offsetof(type, member) ((int)__builtin_offsetof(type, member))
 
 /*
 The user sees the "object" member within the allocation structure. This macro
@@ -27,10 +28,10 @@ object.
 */
 #define allocation_address(o) ((Allocation*)((char*)(o) - offsetof(Allocation, object)))
 
-typedef struct Type Type
+*typedef struct Type Type
 typedef struct Allocation Allocation
 
-void collect(void)
+*void collect(void)
 
 /*
 Type describes an object in terms of its size and in terms of the offsets of
@@ -38,11 +39,11 @@ pointers to dynamically allocated (and managed) memory that it contains.
 */
 struct Type
     int size // byte size of an object of this type
-    int pointer_count // number of pointers that on object of this type contains
+    int pointer_count // number of pointers that an object of this type contains
     int pointers[] // byte offsets of pointers
 
 /*
-Allocation represents the header of a single memory block allocated for
+Allocation represents the header of a single memory block that is allocated for
 management by this garbage collector. If the user object is an array, then count
 > 0, otherwise count == 0. The type attribute is the type of the user object or
 NULL if the user object does not contain any pointers to dynamically allocated
@@ -62,13 +63,13 @@ uint64_t allocations = 0
 uint64_t roots = 0
 
 /*
-The bottom of the call stack is set in the main function. Needed for scanning
-the stack.
+The bottom of the call stack is set in the initialization (or main) function.
+Needed for scanning the stack.
 */
 uint64_t* bottom_of_stack
 
 // Allocates the given number of bytes.
-void* gc_alloc(int size)
+*void* gc_alloc(int size)
     require("not negative", size >= 0)
     Allocation* a = calloc(1, sizeof(Allocation) + size)
     if a == NULL do
@@ -85,7 +86,7 @@ void* gc_alloc(int size)
     return a->object
 
 // Allocates an object of the given type.
-void* gc_alloc_object(Type* type)
+*void* gc_alloc_object(Type* type)
     require_not_null(type)
     Allocation* a = calloc(1, sizeof(Allocation) + type->size)
     // collect() // stress test collection
@@ -103,7 +104,7 @@ void* gc_alloc_object(Type* type)
     return a->object
 
 // Allocates an array of count objects of the given type.
-void* gc_alloc_array(Type* type, int count)
+*void* gc_alloc_array(Type* type, int count)
     require_not_null(type)
     require("positive", count > 0)
     Allocation* a = calloc(1, sizeof(Allocation) + count * type->size)
@@ -121,20 +122,20 @@ void* gc_alloc_array(Type* type, int count)
     return a->object
 
 // Checks if the set of roots contains o.
-bool contains_root(void* o)
+*bool contains_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
     return tr_contains(roots, a)
 
 // Adds an object as a root object.
-void add_root(void* o)
+*void add_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
     tr_insert(&roots, a)
     ensure("is a root", tr_contains(roots, a))
 
 // Removes an object from the set of root objects.
-void remove_root(void* o)
+*void remove_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
     tr_remove(&roots, a)
@@ -159,7 +160,7 @@ collector. Type itself is dynamically allocated, but not garbage collected. The
 size should respect the requirements of alignment, if used with arrays. The
 pointer table is initialized to zeros.
 */
-Type* new_type(int size, int pointer_count)
+*Type* new_type(int size, int pointer_count)
     require("not negative", size >= 0)
     require("not negative", pointer_count >= 0)
     Type* t = xcalloc(1, sizeof(Type) + pointer_count * sizeof(int))
@@ -168,7 +169,7 @@ Type* new_type(int size, int pointer_count)
     return t
 
 // Sets the offset of i-th the pointer to managed memory.
-void type_set_offset(Type* type, int index, int offset)
+*void type_set_offset(Type* type, int index, int offset)
     require_not_null(type)
     require("valid index", 0 <= index && index < type->pointer_count)
     require("valid offset", 0 <= offset && offset + sizeof(void*) <= type->size)
@@ -184,14 +185,14 @@ bool f_sweep(uint64_t x)
         a->marked = false
         return true // keep
     else
-        PLf("free %p", a)
+        PLf("free a = %p, o = %p", a, a->object)
         free(a)
         return false // remove
 void sweep(void)
     trie_visit(&allocations, f_sweep)
 
 // Marks all objects reachable from o, including o itself.
-void mark(Allocation* a) // todo: should call with allocation as argument?
+void mark(Allocation* a)
     assert_not_null(a)
     PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
     if a->marked do return
@@ -247,9 +248,10 @@ void mark_stack(void)
 /*
 Called when it is necessary to collect garbage. The stack is automatically
 searched for pointers to garbage-collected memory. Moreover, objects that have
-explicitly been added as root objects are also scanned.
+explicitly been added as root objects are also scanned. This function may also
+be called manually by clients.
 */
-void collect(void)
+*void collect(void)
     mark_stack()
     mark_roots()
     sweep()
@@ -363,7 +365,6 @@ int sum_tree(Node* t)
     if t == NULL do return 0
     return sum_tree(t->left) + t->i + sum_tree(t->right)
 
-// Test function.
 void test0(void)
     a_type = make_a_type()
     printf("a_type = %p\n", a_type)
@@ -377,20 +378,20 @@ void test0(void)
 
     A* a2 = new_a(7, "abc", "def")
     print_allocations()
-    //mark(a1->t)
-    // mark(a1)
-    // mark(b); print_allocations()
-    // sweep(); print_allocations()
+    // mark(allocation_address(a1->t))
+    // mark(allocation_address(a1))
     add_root(b)
-    //add_root(a2)
-    // remove_root(a2)
-    // collect()
+    add_root(a2)
+    remove_root(b)
+    remove_root(a2)
+    // a1 = NULL; a2 = NULL; b = NULL
+    mark_stack(); print_allocations()
     mark_roots(); print_allocations()
     sweep(); print_allocations()
 
     B* bs = gc_alloc_array(b_type, 3)
     Allocation* al = allocation_address(bs)
-    printf("%p, %p\n", al, allocation_address(a1))
+    PLf("bs = %p, a1 = %p", allocation_address(bs), allocation_address(a1))
     PLi(al->count)
     PLi(al->type->pointer_count)
     for int i = 0; i < 3; i++ do
@@ -399,8 +400,8 @@ void test0(void)
         bi->a = a1
         print_b(bi)
     print_allocations()
-    mark(allocation_address(bs))
-    print_allocations()
+    mark(allocation_address(bs)); print_allocations()
+    sweep(); print_allocations()
 
     free(a_type)
     free(b_type)
@@ -412,7 +413,7 @@ int tree_sum(void)
     // remove_root(t)
     return n
 
-void test(void)
+void test1(void)
     node_type = make_node_type()
     printf("node_type = %p\n", node_type)
     int n = tree_sum()
@@ -422,36 +423,24 @@ void test(void)
     print_allocations()
     free(node_type)
 
-void test2(void)
+void test(void)
     node_type = make_node_type()
     printf("node_type = %p\n", node_type)
-    //Node* t = NULL
-    Node* t = node(1,
-                   node(2, leaf(3), leaf(4)),
-                   node(5, leaf(6), leaf(7)))
+    Node* t = NULL
+    for int i = 0; i < 10; i++ do
+        t = node(i, t, NULL)
     print_tree(t)
     add_root(t)
-    //t = NULL
-    //t->left = NULL
-    //t->left->left = NULL
     t->left->left->left = t // handle cycles
-    //t->right->right->right = t
-    //add_root(t->left)
-    //add_root(t->right)
-    //add_root(t->right->left)
     print_allocations()
+    mark_stack(); print_allocations()
     mark_roots(); print_allocations()
     sweep(); print_allocations()
-    Node* s = leaf(123)
-    t = leaf(124)
-    t = NULL
-    print_allocations()
-    printf("&s = %p\n", &s)
-    //mark_stack();
-    print_allocations()
-    s = NULL
-    collect()
-    print_allocations()
+    t->left->left = NULL
+    print_tree(t)
+    mark_stack(); print_allocations()
+    mark_roots(); print_allocations()
+    sweep(); print_allocations()
     free(node_type)
 
 void test_alignment(void)
