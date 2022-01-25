@@ -90,8 +90,8 @@ uint64_t* bottom_of_stack = NULL
     // a->count = 0
     // a->type = NULL
     tr_insert(&allocations, a)
-    assert("inserted", tr_contains(allocations, a))
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
+    ensure("inserted", tr_contains(allocations, a))
     return a->object
 
 // Allocates an object of the given type.
@@ -108,8 +108,8 @@ uint64_t* bottom_of_stack = NULL
     // a->count = 0
     a->type = type
     tr_insert(&allocations, a)
-    assert("inserted", tr_contains(allocations, a))
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
+    ensure("inserted", tr_contains(allocations, a))
     return a->object
 
 // Allocates an array of count objects of the given type.
@@ -126,8 +126,8 @@ uint64_t* bottom_of_stack = NULL
     a->count = count
     a->type = type
     tr_insert(&allocations, a)
-    assert("inserted", tr_contains(allocations, a))
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
+    ensure("inserted", tr_contains(allocations, a))
     return a->object
 
 *bool gc_is_empty(void)
@@ -242,7 +242,7 @@ void mark_stack(void)
     memset(&buf, 0, sizeof(jmp_buf))
     setjmp(buf) // save the contents of the registers
     uint64_t* top_of_stack = (uint64_t*)&buf
-    assert("aligned pointer", (*top_of_stack & 7) == 0)
+    assert("aligned pointer", ((uint64_t)top_of_stack & 7) == 0)
     assert_not_null(bottom_of_stack)
     PLf("bottom_of_stack = %p", bottom_of_stack)
     PLf("top_of_stack    = %p", top_of_stack)
