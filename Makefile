@@ -4,9 +4,9 @@ DEBUG = -g
 # dependency chain:
 # exe <-- o*       link
 # o <-- c + h*     compile
-# c <-- h*         preprocessor
-# c + h <-- h.c     headify         create header and implementation files
-# h.c <-- d.c       embrace         create C code with braces {...}
+# c <-- c + h*     preprocessor
+# c + h <-- h.c    headify         create header and implementation files
+# h.c <-- d.c      embrace         create C code with braces {...}
 
 OBJECTS = gc.o util.o trie.o gc_test.o
 SOURCES = $(OBJECTS:.o=.c)

@@ -1,3 +1,8 @@
+/*
+@author: Michael Rohs
+@date: January 19, 2021
+*/
+
 #define NO_DEBUG
 // #define NO_ASSERT
 // #define NO_REQUIRE
