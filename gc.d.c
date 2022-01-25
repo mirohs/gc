@@ -3,11 +3,15 @@
 @date: January 19, 2021
 */
 
+#define NO_DEBUG
+// #define NO_ASSERT
+// #define NO_REQUIRE
+// #define NO_ENSURE
+
 #include <setjmp.h>
 #include "util.h"
 #include "trie.h"
 #include "gc.h"
-#undef NODEBUG
 
 /*
 Macros for trie functions (see trie.h). The three least significant bits of
@@ -28,16 +32,16 @@ object.
 */
 #define allocation_address(o) ((Allocation*)((char*)(o) - offsetof(Allocation, object)))
 
-*typedef struct Type Type
+*typedef struct GCType GCType
 typedef struct Allocation Allocation
 
-*void collect(void)
+*void gc_collect(void)
 
 /*
-Type describes an object in terms of its size and in terms of the offsets of
+GCType describes an object in terms of its size and in terms of the offsets of
 pointers to dynamically allocated (and managed) memory that it contains.
 */
-struct Type
+struct GCType
     int size // byte size of an object of this type
     int pointer_count // number of pointers that an object of this type contains
     int pointers[] // byte offsets of pointers
@@ -53,7 +57,7 @@ offset "object".
 struct Allocation
     bool marked // set by mark (if this allocation is reachable) and cleared by sweep
     int count // number of array elements or 0
-    Type* type // type of the user object or NULL
+    GCType* type // type of the user object or NULL
     char object[] // <-- user object starts here
 
 // The trie of all allocations.
@@ -66,7 +70,12 @@ uint64_t roots = 0
 The bottom of the call stack is set in the initialization (or main) function.
 Needed for scanning the stack.
 */
-uint64_t* bottom_of_stack
+uint64_t* bottom_of_stack = NULL
+
+*void gc_set_bottom_of_stack(void* bos)
+    require_not_null(bos)
+    assert("aligned pointer", (*(uint64_t*)bos & 7) == 0)
+    bottom_of_stack = bos
 
 // Allocates the given number of bytes.
 *void* gc_alloc(int size)
@@ -74,7 +83,7 @@ uint64_t* bottom_of_stack
     Allocation* a = calloc(1, sizeof(Allocation) + size)
     if a == NULL do
         // if could not get memory, collect and try again
-        collect()
+        gc_collect()
         // use xcalloc here to stop if fails again
         a = xcalloc(1, sizeof(Allocation) + size)
     // a->marked = false
@@ -86,13 +95,13 @@ uint64_t* bottom_of_stack
     return a->object
 
 // Allocates an object of the given type.
-*void* gc_alloc_object(Type* type)
+*void* gc_alloc_object(GCType* type)
     require_not_null(type)
     Allocation* a = calloc(1, sizeof(Allocation) + type->size)
-    // collect() // stress test collection
+    // gc_collect() // stress test collection
     if a == NULL do
         // if could not get memory, collect and try again
-        collect()
+        gc_collect()
         // use xcalloc here to stop if fails again
         a = xcalloc(1, sizeof(Allocation) + type->size)
     // a->marked = false
@@ -104,13 +113,13 @@ uint64_t* bottom_of_stack
     return a->object
 
 // Allocates an array of count objects of the given type.
-*void* gc_alloc_array(Type* type, int count)
+*void* gc_alloc_array(GCType* type, int count)
     require_not_null(type)
     require("positive", count > 0)
     Allocation* a = calloc(1, sizeof(Allocation) + count * type->size)
     if a == NULL do
         // if could not get memory, collect and try again
-        collect()
+        gc_collect()
         // use xcalloc here to stop if fails again
         a = xcalloc(1, sizeof(Allocation) + count * type->size)
     // a->marked = false
@@ -121,21 +130,24 @@ uint64_t* bottom_of_stack
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
     return a->object
 
+*bool gc_is_empty(void)
+    return trie_is_empty(allocations)
+
 // Checks if the set of roots contains o.
-*bool contains_root(void* o)
+*bool gc_contains_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
     return tr_contains(roots, a)
 
 // Adds an object as a root object.
-*void add_root(void* o)
+*void gc_add_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
     tr_insert(&roots, a)
     ensure("is a root", tr_contains(roots, a))
 
 // Removes an object from the set of root objects.
-*void remove_root(void* o)
+*void gc_remove_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
     tr_remove(&roots, a)
@@ -156,20 +168,20 @@ void print_allocations(void)
 /*
 Allocates a new type with the given size of the user object and the given number
 of pointers to dynamically allocated content that is managed by the garbage
-collector. Type itself is dynamically allocated, but not garbage collected. The
+collector. GCType itself is dynamically allocated, but not garbage collected. The
 size should respect the requirements of alignment, if used with arrays. The
 pointer table is initialized to zeros.
 */
-*Type* new_type(int size, int pointer_count)
+*GCType* gc_new_type(int size, int pointer_count)
     require("not negative", size >= 0)
     require("not negative", pointer_count >= 0)
-    Type* t = xcalloc(1, sizeof(Type) + pointer_count * sizeof(int))
+    GCType* t = xcalloc(1, sizeof(GCType) + pointer_count * sizeof(int))
     t->size = size
     t->pointer_count = pointer_count
     return t
 
 // Sets the offset of i-th the pointer to managed memory.
-*void type_set_offset(Type* type, int index, int offset)
+*void gc_set_offset(GCType* type, int index, int offset)
     require_not_null(type)
     require("valid index", 0 <= index && index < type->pointer_count)
     require("valid offset", 0 <= offset && offset + sizeof(void*) <= type->size)
@@ -186,18 +198,19 @@ bool f_sweep(uint64_t x)
         return true // keep
     else
         PLf("free a = %p, o = %p", a, a->object)
+        // printf("free a = %p, o = %p\n", a, a->object)
         free(a)
         return false // remove
 void sweep(void)
     trie_visit(&allocations, f_sweep)
 
-// Marks all objects reachable from o, including o itself.
+// Marks all allocations reachable from a, including a itself.
 void mark(Allocation* a)
     assert_not_null(a)
     PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
     if a->marked do return
     a->marked = true
-    Type* t = a->type
+    GCType* t = a->type
     if t == NULL do return
     char* element = a->object
     int n = a->count
@@ -230,6 +243,7 @@ void mark_stack(void)
     setjmp(buf) // save the contents of the registers
     uint64_t* top_of_stack = (uint64_t*)&buf
     assert("aligned pointer", (*top_of_stack & 7) == 0)
+    assert_not_null(bottom_of_stack)
     PLf("bottom_of_stack = %p", bottom_of_stack)
     PLf("top_of_stack    = %p", top_of_stack)
     assert("stack grows down", top_of_stack < bottom_of_stack)
@@ -251,197 +265,10 @@ searched for pointers to garbage-collected memory. Moreover, objects that have
 explicitly been added as root objects are also scanned. This function may also
 be called manually by clients.
 */
-*void collect(void)
+*void gc_collect(void)
     mark_stack()
     mark_roots()
     sweep()
-
-/////////////////////////////////////////////////
-// Test code below.
-
-// A string is an object without pointers to managed memory, so its type is NULL.
-char* new_str(char* s)
-    require_not_null(s)
-    char* t = gc_alloc(strlen(s) + 1)
-    strcpy(t, s)
-    return t
-
-/*
-Example type that contains one pointer to managed memory (t). The other pointer
-(s) is not relevant, because it is supposed to point to memory that is not
-managed by the garbage collector.
-*/
-typedef struct A A
-struct A
-    int i
-    char* s // not managed
-    char* t // managed
-
-// A needs a type, bacause it contains one pointer to managed memory (t).
-Type* make_a_type(void)
-    Type* type = new_type(sizeof(A), 1)
-    type_set_offset(type, 0, offsetof(A, t))
-    return type
-
-// Singleton type object for objects of type A.
-Type* a_type
-
-// Creates and initializes a new instance of type A.
-A* new_a(int i, char* s, char* t)
-    require_not_null(s)
-    require_not_null(t)
-    A* a = gc_alloc_object(a_type)
-    a->i = i
-    a->s = s
-    a->t = new_str(t)
-    return a
-
-// Prints an A object.
-void print_a(A* a)
-    require_not_null(a)
-    printf("A(%d, %s, %s)\n", a->i, a->s, a->t)
-
-// Example type that contains one pointer to managed memory (a).
-typedef struct B B
-struct B
-    int j
-    A* a // managed
-
-// B needs a type, bacause it contains one pointer to managed memory (a).
-Type* make_b_type(void)
-    Type* type = new_type(sizeof(B), 1)
-    type_set_offset(type, 0, offsetof(B, a))
-    return type
-
-// Singleton type object for objects of type B.
-Type* b_type
-
-// Creates and initializes a new instance of type B.
-B* new_b(int j, A* a)
-    require_not_null(a)
-    B* b = gc_alloc_object(b_type)
-    b->j = j
-    b->a = a
-    return b
-
-// Prints a B object.
-void print_b(B* b)
-    require_not_null(b)
-    printf("B(%d, %d, %s, %s)\n", b->j, b->a->i, b->a->s, b->a->t)
-
-typedef struct Node Node
-struct Node
-    int i
-    Node* left // managed
-    Node* right // managed
-
-Type* make_node_type(void)
-    Type* type = new_type(sizeof(Node), 2)
-    type_set_offset(type, 0, offsetof(Node, left))
-    type_set_offset(type, 1, offsetof(Node, right))
-    return type
-
-Type* node_type
-
-Node* node(int i, Node* left, Node* right)
-    Node* node = gc_alloc_object(node_type)
-    collect() // stress test collection
-    node->i = i
-    PLi(i)
-    node->left = left
-    node->right = right
-    return node
-
-Node* leaf(int i)
-    return node(i, NULL, NULL)
-
-void print_tree(Node* t)
-    if t != NULL do
-        printf("o = %p, a = %p, i = %d\n", t, allocation_address(t), t->i)
-        print_tree(t->left)
-        print_tree(t->right)
-
-int sum_tree(Node* t)
-    if t == NULL do return 0
-    return sum_tree(t->left) + t->i + sum_tree(t->right)
-
-void test0(void)
-    a_type = make_a_type()
-    printf("a_type = %p\n", a_type)
-    b_type = make_b_type()
-    printf("b_type = %p\n", b_type)
-
-    A* a1 = new_a(5, "hello", "world")
-    print_a(a1)
-    B* b = new_b(3, a1)
-    print_b(b)
-
-    A* a2 = new_a(7, "abc", "def")
-    print_allocations()
-    // mark(allocation_address(a1->t))
-    // mark(allocation_address(a1))
-    add_root(b)
-    add_root(a2)
-    remove_root(b)
-    remove_root(a2)
-    // a1 = NULL; a2 = NULL; b = NULL
-    mark_stack(); print_allocations()
-    mark_roots(); print_allocations()
-    sweep(); print_allocations()
-
-    B* bs = gc_alloc_array(b_type, 3)
-    Allocation* al = allocation_address(bs)
-    PLf("bs = %p, a1 = %p", allocation_address(bs), allocation_address(a1))
-    PLi(al->count)
-    PLi(al->type->pointer_count)
-    for int i = 0; i < 3; i++ do
-        B* bi = bs + i
-        bi->j = i
-        bi->a = a1
-        print_b(bi)
-    print_allocations()
-    mark(allocation_address(bs)); print_allocations()
-    sweep(); print_allocations()
-
-    free(a_type)
-    free(b_type)
-
-int tree_sum(void)
-    Node* t = node(1, node(2, leaf(3), leaf(4)), node(5, leaf(6), leaf(7)))
-    // add_root(t)
-    int n = sum_tree(t)
-    // remove_root(t)
-    return n
-
-void test1(void)
-    node_type = make_node_type()
-    printf("node_type = %p\n", node_type)
-    int n = tree_sum()
-    printf("n = %d\n", n)
-    assert("correct sum", n == 1+2+3+4+5+6+7)
-    collect()
-    print_allocations()
-    free(node_type)
-
-void test(void)
-    node_type = make_node_type()
-    printf("node_type = %p\n", node_type)
-    Node* t = NULL
-    for int i = 0; i < 10; i++ do
-        t = node(i, t, NULL)
-    print_tree(t)
-    add_root(t)
-    t->left->left->left = t // handle cycles
-    print_allocations()
-    mark_stack(); print_allocations()
-    mark_roots(); print_allocations()
-    sweep(); print_allocations()
-    t->left->left = NULL
-    print_tree(t)
-    mark_stack(); print_allocations()
-    mark_roots(); print_allocations()
-    sweep(); print_allocations()
-    free(node_type)
 
 void test_alignment(void)
     // test address alignment on the stack
@@ -485,9 +312,7 @@ void test_alignment(void)
     PLf("&k = %p, &l = %p, &m = %p, %llu", 
         &k, &l, &m, (uint64_t)&k - (uint64_t)&m)
 
-int main(int argc, char* argv[])
-    bottom_of_stack = (uint64_t*)&argv
-    assert("aligned pointer", (*bottom_of_stack & 7) == 0)
-    test()
+int xmain(int argc, char* argv[])
+    gc_set_bottom_of_stack(&argv)
     test_alignment()
     return 0
