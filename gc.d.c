@@ -74,7 +74,7 @@ uint64_t* bottom_of_stack = NULL
 
 *void gc_set_bottom_of_stack(void* bos)
     require_not_null(bos)
-    assert("aligned pointer", (*(uint64_t*)bos & 7) == 0)
+    assert("aligned pointer", ((uint64_t)bos & 7) == 0)
     bottom_of_stack = bos
 
 // Allocates the given number of bytes.
