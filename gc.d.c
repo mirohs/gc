@@ -272,7 +272,7 @@ be called manually by clients.
 
 void test_alignment(void)
     // test address alignment on the stack
-    assert("aligned pointer", (*bottom_of_stack & 7) == 0)
+    assert("aligned pointer", ((uint64_t)bottom_of_stack & 7) == 0)
     assert("valid pointer size", sizeof(uint64_t) == sizeof(void*))
 
     char* s = "x"
