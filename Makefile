@@ -30,6 +30,10 @@ trie: trie.o trie_test.o util.o
 %.c %.h: %.h.c
 	../headify/headify $<
 
+# format the generated .c- and .h-files using
+# astyle --options=.astylerc
+# see .astylerc
+
 # pattern rule for compiling .c-file to executable
 #%: %.o util.o
 #	gcc $(CFLAGS) $(DEBUG) $^ -lm -o $@
