@@ -2,11 +2,27 @@
 
 ## A simple mark-and-sweep garbage collector.
 
-This is a simple mark-and-sweep [garbage collector](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)) that is backed by a [trie](https://en.wikipedia.org/wiki/Trie). The runtime stack is automatically scanned for pointers to managed memory. Moreover, additional root objects may be added, e.g. for objects that are stored in static or file-level variables. The garbage collector is provided with information about the structure of objects to make the scanning of the object graph reasonably efficient. To this end a type descriptor tells the garbage collector at which offsets within structures to find pointers to managed memory.
+This is a simple mark-and-sweep [garbage
+collector](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science))
+that is backed by a [trie](https://en.wikipedia.org/wiki/Trie). The runtime
+stack is automatically scanned for pointers to managed memory. Moreover,
+additional root objects may be added, e.g. for objects that are stored in static
+or file-level variables. The garbage collector is provided with information
+about the structure of objects to make the scanning of the object graph
+reasonably efficient. To this end a type descriptor tells the garbage collector
+at which offsets within structures to find pointers to managed memory.
 
-The garbage collector is implemented in debraced C. Debraced C is C with optional braces, significant indentation, and automatic generation of header files. The programmer writes code with optional braces in a `.d.c` (debraced C) file. Public items are marked with a `*` at the beginning of the line. Public items are exported from the translation unit and included in the module's header file. The compilation process is automated by `make`.
+The garbage collector is implemented in debraced C. Debraced C is C with
+optional braces, significant indentation, and automatic generation of header
+files. The programmer writes code with optional braces in a `.d.c` (debraced C)
+file. Public items are marked with a `*` at the beginning of the line. Public
+items are exported from the translation unit and included in the module's header
+file. The compilation process is automated by `make`.
 
-The tool [embrace](https://github.com/mirohs/embrace) reintroduces braces into the debraced C file and the tool [headify](https://github.com/mirohs/headify) automatically generates header files. Both tools have to be available to compile this project.
+The tool [embrace](https://github.com/mirohs/embrace) reintroduces braces into
+the debraced C file and the tool [headify](https://github.com/mirohs/headify)
+automatically generates header files. Both tools have to be available to compile
+this project.
 
 ## Building
 
@@ -54,7 +70,8 @@ void gc_collect(void);
 
 ## Example Usage
 
-The following example illustrates how the garbage collector is used in a client program.
+The following example illustrates how the garbage collector is used in a client
+program.
 
 ```c
 #include "util.h"
