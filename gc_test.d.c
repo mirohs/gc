@@ -8,13 +8,14 @@
 // #define NO_REQUIRE
 // #define NO_ENSURE
 
-#include <setjmp.h>
 #include <time.h>
 #include "util.h"
-#include "trie.h"
 #include "gc.h"
 
-// A string is an object without pointers to managed memory, so its type is NULL.
+/*
+Allocate a C string. A string is an object without pointers to managed memory.
+Thus it does not need a GCType and uses gc_alloc.
+*/
 char* new_str(char* s)
     require_not_null(s)
     char* t = gc_alloc(strlen(s) + 1)
@@ -32,7 +33,7 @@ struct A
     char* s // not managed
     char* t // managed
 
-// A needs a type, bacause it contains one pointer to managed memory (t).
+// A needs a GCType, bacause it contains one pointer to managed memory (t).
 GCType* make_a_type(void)
     GCType* type = gc_new_type(sizeof(A), 1)
     gc_set_offset(type, 0, offsetof(A, t))
@@ -48,7 +49,7 @@ A* new_a(int i, char* s, char* t)
     A* a = gc_alloc_object(a_type)
     a->i = i
     a->s = s
-    a->t = new_str(t)
+    a->t = new_str(t) // create a managed copy
     return a
 
 // Prints an A object.
@@ -121,10 +122,12 @@ int sum_tree(Node* t)
     return sum_tree(t->left) + t->i + sum_tree(t->right)
 
 void test0(void)
-    a_type = make_a_type()
-    printf("a_type = %p\n", a_type)
-    b_type = make_b_type()
-    printf("b_type = %p\n", b_type)
+    if a_type == NULL do
+        a_type = make_a_type()
+        printf("a_type = %p\n", a_type)
+    if b_type == NULL do
+        b_type = make_b_type()
+        printf("b_type = %p\n", b_type)
 
     A* a1 = new_a(5, "hello", "world")
     print_a(a1)
@@ -244,4 +247,3 @@ int main(int argc, char* argv[])
     gc_collect()
     test_equal_i(gc_is_empty(), true)
     return 0
-
