@@ -466,7 +466,7 @@ bool base_test_equal_s(const char *file, int line, String a, char* e);
 
 // Debugging
 
-#ifdef NODEBUG
+#ifdef NO_DEBUG
     #define PL
     #define PLi(i)
     #define PLs(s)
