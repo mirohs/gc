@@ -18,9 +18,9 @@ Macros for trie functions (see trie.h). The three least significant bits of
 pointers are zero. A value in the trie must have the LSB clear. Thus can be
 shifted right by two bits. The LSB of the result is still zero.
 */
-#define tr_insert(t, x) trie_insert(t, (uint64_t)(x) >> 2, 0)
-#define tr_contains(t, x) trie_contains(t, (uint64_t)(x) >> 2, 0)
-#define tr_remove(t, x) trie_remove(t, (uint64_t)(x) >> 2, 0)
+#define tr_insert(t, x) trie_insert(t, (uint64_t)(x) >> 3, 0)
+#define tr_contains(t, x) trie_contains(t, (uint64_t)(x) >> 3, 0)
+#define tr_remove(t, x) trie_remove(t, (uint64_t)(x) >> 3, 0)
 
 // Gets the offset of a struct member.
 *#define offsetof(type, member) ((int)__builtin_offsetof(type, member))
@@ -89,6 +89,7 @@ uint64_t* bottom_of_stack = NULL
     // a->marked = false
     // a->count = 0
     // a->type = NULL
+    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
     tr_insert(&allocations, a)
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
     ensure("inserted", tr_contains(allocations, a))
@@ -107,6 +108,7 @@ uint64_t* bottom_of_stack = NULL
     // a->marked = false
     // a->count = 0
     a->type = type
+    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
     tr_insert(&allocations, a)
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
     ensure("inserted", tr_contains(allocations, a))
@@ -125,6 +127,7 @@ uint64_t* bottom_of_stack = NULL
     // a->marked = false
     a->count = count
     a->type = type
+    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
     tr_insert(&allocations, a)
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
     ensure("inserted", tr_contains(allocations, a))
@@ -137,12 +140,13 @@ uint64_t* bottom_of_stack = NULL
 *bool gc_contains_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
-    return tr_contains(roots, a)
+    return a != NULL && ((uint64_t)a & 0xf) == 0 && tr_contains(roots, a)
 
 // Adds an object as a root object.
 *void gc_add_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
+    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
     tr_insert(&roots, a)
     ensure("is a root", tr_contains(roots, a))
 
@@ -150,12 +154,13 @@ uint64_t* bottom_of_stack = NULL
 *void gc_remove_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
+    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
     tr_remove(&roots, a)
     ensure("is not a root", !tr_contains(roots, a))
 
 // Prints the current allocations.
 bool f_print(uint64_t x)
-    Allocation* a = (Allocation*)(x << 2)
+    Allocation* a = (Allocation*)(x << 3)
     printf("\ta = %p, o = %p, count = %d, marked = %d\n", a, a->object, a->count, a->marked)
     return true
 void print_allocations(void)
@@ -192,7 +197,7 @@ Sweeps the marked allocations and either clears the mark or deletes the
 allocation.
 */
 bool f_sweep(uint64_t x)
-    Allocation* a = (Allocation*)(x << 2)
+    Allocation* a = (Allocation*)(x << 3)
     if a->marked do
         a->marked = false
         return true // keep
@@ -228,7 +233,7 @@ void mark(Allocation* a)
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)
-    Allocation* r = (Allocation*)(x << 2)
+    Allocation* r = (Allocation*)(x << 3)
     mark(r)
     return true // keep
 void mark_roots(void)
@@ -251,13 +256,13 @@ void mark_stack(void)
         // is the value on the stack at address p a valid allocation?
         // if so, the stack contains the user part, need to subtract
         // offset of object in Allocation
-        Allocation* a = allocation_address(*p)
-        uint64_t x = (uint64_t)a
-        if x != 0 && x != 0xfffffffffffffff0 && (x & 7) == 0 do 
-            bool is_allocation = tr_contains(allocations, a)
-            PLf("p = %p, a = %p, is alloc = %d", p, a, is_allocation)
-            if is_allocation do
-                mark(a)
+        if *p != 0 do
+            Allocation* a = allocation_address(*p)
+            if a != NULL && ((uint64_t)a & 0xf) == 0 do 
+                bool is_allocation = tr_contains(allocations, a)
+                PLf("p = %p, a = %p, is alloc = %d", p, a, is_allocation)
+                if is_allocation do
+                    mark(a)
 
 /*
 Called when it is necessary to collect garbage. The stack is automatically
