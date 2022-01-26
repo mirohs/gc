@@ -14,9 +14,10 @@
 #include "gc.h"
 
 /*
-Macros for trie functions (see trie.h). The three least significant bits of
-pointers are zero. A value in the trie must have the LSB clear. Thus can be
-shifted right by two bits. The LSB of the result is still zero.
+Macros for trie functions (see trie.h). The four least significant bits of
+pointers to dynamically allocated memory are zero. A value in the trie must
+have the LSB clear. Thus the pointer value can be shifted right by three
+bits. The LSB of the result is still zero.
 */
 #define tr_insert(t, x) trie_insert(t, (uint64_t)(x) >> 3, 0)
 #define tr_contains(t, x) trie_contains(t, (uint64_t)(x) >> 3, 0)
