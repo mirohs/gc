@@ -33,6 +33,8 @@ object.
 */
 #define allocation_address(o) ((Allocation*)((char*)(o) - offsetof(Allocation, object)))
 
+#define is_alloc_aligned(a) ((a) != NULL && ((uint64_t)(a) & 0xf) == 0)
+
 *typedef struct GCType GCType
 typedef struct Allocation Allocation
 
@@ -82,6 +84,7 @@ uint64_t* bottom_of_stack = NULL
 *void* gc_alloc(int size)
     require("not negative", size >= 0)
     Allocation* a = calloc(1, sizeof(Allocation) + size)
+    // gc_collect() // stress test collection
     if a == NULL do
         // if could not get memory, collect and try again
         gc_collect()
@@ -90,7 +93,7 @@ uint64_t* bottom_of_stack = NULL
     // a->marked = false
     // a->count = 0
     // a->type = NULL
-    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
+    assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
     ensure("inserted", tr_contains(allocations, a))
@@ -109,9 +112,9 @@ uint64_t* bottom_of_stack = NULL
     // a->marked = false
     // a->count = 0
     a->type = type
-    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
+    assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
-    PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
+    //PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
     ensure("inserted", tr_contains(allocations, a))
     return a->object
 
@@ -120,6 +123,7 @@ uint64_t* bottom_of_stack = NULL
     require_not_null(type)
     require("positive", count > 0)
     Allocation* a = calloc(1, sizeof(Allocation) + count * type->size)
+    // gc_collect() // stress test collection
     if a == NULL do
         // if could not get memory, collect and try again
         gc_collect()
@@ -128,7 +132,7 @@ uint64_t* bottom_of_stack = NULL
     // a->marked = false
     a->count = count
     a->type = type
-    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
+    assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
     ensure("inserted", tr_contains(allocations, a))
@@ -141,13 +145,14 @@ uint64_t* bottom_of_stack = NULL
 *bool gc_contains_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
-    return a != NULL && ((uint64_t)a & 0xf) == 0 && tr_contains(roots, a)
+    return is_alloc_aligned(a) && tr_contains(roots, a)
 
 // Adds an object as a root object.
 *void gc_add_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
-    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
+    assert("is aligned", is_alloc_aligned(a))
+    assert("is allocation", tr_contains(allocations, a))
     tr_insert(&roots, a)
     ensure("is a root", tr_contains(roots, a))
 
@@ -155,7 +160,7 @@ uint64_t* bottom_of_stack = NULL
 *void gc_remove_root(void* o)
     require_not_null(o)
     Allocation* a = allocation_address(o)
-    assert("allocation is aligned", a != NULL && ((uint64_t)a & 0xf) == 0)
+    assert("is aligned", is_alloc_aligned(a))
     tr_remove(&roots, a)
     ensure("is not a root", !tr_contains(roots, a))
 
@@ -212,7 +217,9 @@ void sweep(void)
 
 // Marks all allocations reachable from a, including a itself.
 void mark(Allocation* a)
-    assert_not_null(a)
+    PLf("frame address = %p", __builtin_frame_address(0))
+    require_not_null(a)
+    require("is allocation", tr_contains(allocations, a))
     PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
     if a->marked do return
     a->marked = true
@@ -226,44 +233,82 @@ void mark(Allocation* a)
     int* pointers = t->pointers
     for int i = 0; i < n; i++ do // for all elements
         for int j = 0; j < m; j++ do // for each pointer in i-th element
+            PLf("i = %d, j = %d", i, j)
             int p = pointers[j]
             char* pj = *(char**)(element + p)
             if pj != NULL do
-                mark(allocation_address(pj))
+                a = allocation_address(pj)
+                PLf("pj = %p, a = %p, count = %d, marked = %d", pj, a, a->count, a->marked)
+                assert("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
+                mark(a)
         element += element_size
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)
+    PLf("%llx", x << 3)
     Allocation* r = (Allocation*)(x << 3)
     mark(r)
     return true // keep
 void mark_roots(void)
     trie_visit(&roots, f_mark_roots)
 
-// Scan the stack for pointers to allocations.
-void mark_stack(void)
+void mark_registers(void)
     // https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html
-    // https://en.wikipedia.org/wiki/Setjmp.h
-    jmp_buf buf // 148 bytes (apple-darwin21.2.0, clang 13.0.0)
+    PLf("frame address = %p", __builtin_frame_address(0))
+
+    /* As a result of optimization (-fomit-frame-pointer) the frame pointer
+    register (rbp) may be used as a regular register. In this case the frame
+    pointer reggister may contain a pointer to a managed object and thus has to
+    be scanned. Unfortunately, setjmp mangles rbp for security reasons. Thus it
+    is scanned explicitly. */
+    uint64_t rbp = 0
+    __asm__ ("movq %%rbp, %0" : "=r"(rbp))
+    PLf("rbp = %llx", rbp)
+    if rbp != 0 do
+        Allocation* a = allocation_address(rbp)
+        if is_alloc_aligned(a) && tr_contains(allocations, a) do
+            PLf("found allocation: rbp = %llx, a = %p", rbp, a)
+            mark(a)
+
+    /* https://en.wikipedia.org/wiki/Setjmp.h
+    /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/setjmp.h
+    Registers may contain pointers to managed objects. On x86-64/macOS setjmp
+    saves callee-saved registers (rbp, rsp, rbx, r12, r13, r14, r15). It mangles
+    rbp and rsp for security reasons. Caller-saved registers have already been
+    saved at the call-site, which is a stack frame below this stack frame in
+    client code (outside this gc). The stack frames of client code need to be
+    scanned completely, up to the bottom of the stack. */
+    jmp_buf buf // 148 bytes for x86-64/macOS
+    assert("aligned buf", ((uint64_t)&buf & 7) == 0)
     memset(&buf, 0, sizeof(jmp_buf))
-    setjmp(buf) // save the contents of the registers
-    uint64_t* top_of_stack = (uint64_t*)&buf
+    setjmp(buf) // save the contents of callee-saved registers
+    uint64_t* p = (uint64_t*)&buf
+    uint64_t* q = p + sizeof(jmp_buf) / sizeof(uint64_t)
+    for ; p < q; p++ do
+        if *p != 0 do
+            Allocation* a = allocation_address(*p)
+            if is_alloc_aligned(a) && tr_contains(allocations, a) do
+                PLf("found allocation: p = %p, a = %p", p, a)
+                mark(a)
+
+// Scan the stack for pointers to allocations.
+void mark_stack(uint64_t* top_of_stack)
+    PLf("frame address = %p", __builtin_frame_address(0))
     assert("aligned pointer", ((uint64_t)top_of_stack & 7) == 0)
     assert_not_null(bottom_of_stack)
     PLf("bottom_of_stack = %p", bottom_of_stack)
-    PLf("top_of_stack    = %p", top_of_stack)
+    PLf("top_of_stack    = %p %ld", top_of_stack, bottom_of_stack - top_of_stack)
     assert("stack grows down", top_of_stack < bottom_of_stack)
     for uint64_t* p = top_of_stack; p < bottom_of_stack; p++ do
+        // PLf("p = %p", p)
         // is the value on the stack at address p a valid allocation?
         // if so, the stack contains the user part, need to subtract
         // offset of object in Allocation
         if *p != 0 do
             Allocation* a = allocation_address(*p)
-            if a != NULL && ((uint64_t)a & 0xf) == 0 do 
-                bool is_allocation = tr_contains(allocations, a)
-                PLf("p = %p, a = %p, is alloc = %d", p, a, is_allocation)
-                if is_allocation do
-                    mark(a)
+            if is_alloc_aligned(a) && tr_contains(allocations, a) do 
+                PLf("found allocation: p = %p, a = %p", p, a)
+                mark(a)
 
 /*
 Called when it is necessary to collect garbage. The stack is automatically
@@ -272,9 +317,13 @@ explicitly been added as root objects are also scanned. This function may also
 be called manually by clients.
 */
 *void gc_collect(void)
-    mark_stack()
+    PLf("frame address = %p", __builtin_frame_address(0))
+    mark_registers()
+    mark_stack(__builtin_frame_address(0))
     mark_roots()
+    // PL; print_allocations()
     sweep()
+    // PL; print_allocations()
 
 void test_alignment(void)
     // test address alignment on the stack
