@@ -33,6 +33,7 @@ object.
 */
 #define allocation_address(o) ((Allocation*)((char*)(o) - offsetof(Allocation, object)))
 
+// Checks whether a is not NULL and 16-byte-aligned.
 #define is_alloc_aligned(a) ((a) != NULL && ((uint64_t)(a) & 0xf) == 0)
 
 *typedef struct GCType GCType
@@ -114,7 +115,7 @@ uint64_t* bottom_of_stack = NULL
     a->type = type
     assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
-    //PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
+    PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
     ensure("inserted", tr_contains(allocations, a))
     return a->object
 
@@ -252,14 +253,21 @@ bool f_mark_roots(uint64_t x)
 void mark_roots(void)
     trie_visit(&roots, f_mark_roots)
 
-void mark_registers(void)
+/*
+Marks registers and returns its own frame address. mark_registers has its own
+stack frame (noinline). It is called by mark_stack and thus its frame address is
+below (in memory) the frame of mark_stack. The frame address of mark_stack
+serves as the top_of_stack (lowest address) for scanning the stack.
+*/
+uint64_t* __attribute__((noinline)) mark_registers(void)
     // https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html
+    uint64_t* top_of_stack = __builtin_frame_address(0)
     PLf("frame address = %p", __builtin_frame_address(0))
 
     /* As a result of optimization (-fomit-frame-pointer) the frame pointer
     register (rbp) may be used as a regular register. In this case the frame
     pointer register may contain a pointer to a managed object and thus has to
-    be scanned. Unfortunately, setjmp mangles rbp for security reasons. Thus rbp
+    be scanned. Unfortunately, setjmp mangles rbp for security reasons. Thus it
     is scanned explicitly. */
     uint64_t rbp = 0
     __asm__ ("movq %%rbp, %0" : "=r"(rbp))
@@ -290,11 +298,14 @@ void mark_registers(void)
             if is_alloc_aligned(a) && tr_contains(allocations, a) do
                 PLf("found allocation: p = %p, a = %p", p, a)
                 mark(a)
+    end. for
+    ensure("aligned pointer", top_of_stack != NULL && ((uint64_t)top_of_stack & 7) == 0)
+    return top_of_stack
 
 // Scan the stack for pointers to allocations.
-void mark_stack(uint64_t* top_of_stack)
+void mark_stack(void)
     PLf("frame address = %p", __builtin_frame_address(0))
-    assert("aligned pointer", ((uint64_t)top_of_stack & 7) == 0)
+    uint64_t* top_of_stack = mark_registers()
     assert_not_null(bottom_of_stack)
     PLf("bottom_of_stack = %p", bottom_of_stack)
     PLf("top_of_stack    = %p %ld", top_of_stack, bottom_of_stack - top_of_stack)
@@ -318,8 +329,7 @@ be called manually by clients.
 */
 *void gc_collect(void)
     PLf("frame address = %p", __builtin_frame_address(0))
-    mark_registers()
-    mark_stack(__builtin_frame_address(0))
+    mark_stack()
     mark_roots()
     // PL; print_allocations()
     sweep()
