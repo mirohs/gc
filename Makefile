@@ -1,5 +1,5 @@
 CFLAGS = -std=c99 -Wall -Wno-unused-function -Wno-unused-variable -Werror -Wpointer-arith -Wfatal-errors
-DEBUG = -g
+DEBUG = -g -O3
 
 # dependency chain:
 # exe <-- o*       link
