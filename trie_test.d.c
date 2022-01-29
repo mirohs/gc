@@ -180,11 +180,31 @@ void test2(void)
             count, max_level, mean_level / count)
     */
 
-void test(void)
+char* buffer[N]
+
+bool f_visit_true(uint64_t x)
+    x <<= 3
+    bool found_x = false
+    for int i = N/2; !found_x && i < N; i++ do
+        if (uint64_t)buffer[i] == x do
+            found_x = true
+    assert("found x", found_x)
+    return true
+
+bool f_visit_false(uint64_t x)
+    x <<= 3
+    bool found_x = false
+    for int i = N/2; !found_x && i < N; i++ do
+        if (uint64_t)buffer[i] == x do
+            found_x = true
+    assert("found x", found_x)
+    return false
+
+void test3(void)
     uint64_t t = 0
-    char* buffer[N]
     int trailing_zeros = 64
 
+    assert("is empty", trie_is_empty(t))
     for int i = 0; i < N; i++ do
         buffer[i] = xmalloc(i+1)
         // printf("%llx\n", (uint64_t)buffer[i] >> 2)
@@ -192,24 +212,31 @@ void test(void)
         // https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html
         int tz = __builtin_ctz((uint64_t)buffer[i])
         if tz < trailing_zeros do trailing_zeros = tz
-        trie_insert(&t, (uint64_t)buffer[i] >> 2, 0)
-    printf("trailing_zeros = %d\n", trailing_zeros)
+        trie_insert(&t, (uint64_t)buffer[i] >> 3, 0)
+    assert("four trailing_zeros\n", trailing_zeros == 4)
+    assert("not is empty", !trie_is_empty(t))
+
 
     for int i = 0; i < N; i++ do
-        assert("", trie_contains(t, (uint64_t)buffer[i] >> 2, 0))
+        assert("", trie_contains(t, (uint64_t)buffer[i] >> 3, 0))
 
     for int i = 0; i < N/2; i++ do
-        uint64_t x = (uint64_t)buffer[i] >> 2
+        uint64_t x = (uint64_t)buffer[i] >> 3
         trie_remove(&t, x, 0)
         trie_remove(&t, x, 0)
 
     for int i = 0; i < N/2; i++ do
-        uint64_t x = (uint64_t)buffer[i] >> 2
+        uint64_t x = (uint64_t)buffer[i] >> 3
         assert("", !trie_contains(t, x, 0))
 
     for int i = N/2; i < N; i++ do
-        uint64_t x = (uint64_t)buffer[i] >> 2
+        uint64_t x = (uint64_t)buffer[i] >> 3
         assert("", trie_contains(t, x, 0))
+
+    trie_visit(&t, f_visit_true)
+    assert("not is empty", !trie_is_empty(t))
+    trie_visit(&t, f_visit_false)
+    assert("is empty", trie_is_empty(t))
 
     /*
     int count = 0, max_level = 0
@@ -223,6 +250,7 @@ void test(void)
 int main(void)
     test0()
     test1()
-    test()
+    test2()
+    test3()
     return 0
 
