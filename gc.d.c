@@ -219,7 +219,7 @@ void sweep(void)
 void mark(Allocation* a)
     PLf("frame address = %p", __builtin_frame_address(0))
     require_not_null(a)
-    require("is allocation", tr_contains(allocations, a))
+    require("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
     PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
     if a->marked do return
     a->marked = true
@@ -258,8 +258,8 @@ void mark_registers(void)
 
     /* As a result of optimization (-fomit-frame-pointer) the frame pointer
     register (rbp) may be used as a regular register. In this case the frame
-    pointer reggister may contain a pointer to a managed object and thus has to
-    be scanned. Unfortunately, setjmp mangles rbp for security reasons. Thus it
+    pointer register may contain a pointer to a managed object and thus has to
+    be scanned. Unfortunately, setjmp mangles rbp for security reasons. Thus rbp
     is scanned explicitly. */
     uint64_t rbp = 0
     __asm__ ("movq %%rbp, %0" : "=r"(rbp))
