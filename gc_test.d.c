@@ -3,12 +3,14 @@
 @date: January 19, 2022
 */
 
-#define NO_DEBUG
+// #define NO_DEBUG
 // #define NO_ASSERT
 // #define NO_REQUIRE
 // #define NO_ENSURE
 
 #include <time.h>
+#include <errno.h>
+#include <sys/resource.h>
 #include "util.h"
 #include "gc.h"
 
@@ -37,15 +39,17 @@ struct A
 GCType* make_a_type(void)
     GCType* type = gc_new_type(sizeof(A), 1)
     gc_set_offset(type, 0, offsetof(A, t))
+    PLf("%d, %d, %d", offsetof(A, i), offsetof(A, s), offsetof(A, t))
     return type
 
 // Singleton type object for objects of type A.
-GCType* a_type
+GCType* a_type = NULL
 
 // Creates and initializes a new instance of type A.
 A* new_a(int i, char* s, char* t)
     require_not_null(s)
     require_not_null(t)
+    require_not_null(a_type)
     A* a = gc_alloc_object(a_type)
     a->i = i
     a->s = s
@@ -70,11 +74,12 @@ GCType* make_b_type(void)
     return type
 
 // Singleton type object for objects of type B.
-GCType* b_type
+GCType* b_type = NULL
 
 // Creates and initializes a new instance of type B.
 B* new_b(int j, A* a)
     require_not_null(a)
+    require_not_null(b_type)
     B* b = gc_alloc_object(b_type)
     b->j = j
     b->a = a
@@ -121,7 +126,12 @@ int sum_tree(Node* t)
     if t == NULL do return 0
     return sum_tree(t->left) + t->i + sum_tree(t->right)
 
-void test0(void)
+//void test0(void)
+void __attribute__((noinline)) test0(void)
+    PLf("frame address = %p", __builtin_frame_address(0))
+    uint64_t* p = __builtin_frame_address(0)
+    PLf("value at frame address = %llx", *p)
+
     if a_type == NULL do
         a_type = make_a_type()
         printf("a_type = %p\n", a_type)
@@ -131,16 +141,24 @@ void test0(void)
 
     A* a1 = new_a(5, "hello", "world")
     print_a(a1)
+    // a1 = NULL
+    PLf("&a1 = %p", &a1)
+    // a1 = NULL
+    //gc_add_root(a1)
+
     B* b = new_b(3, a1)
     print_b(b)
 
     A* a2 = new_a(7, "abc", "def")
+    print_a(a2)
+    /*
     gc_add_root(b)
     gc_add_root(a2)
     gc_remove_root(b)
     gc_remove_root(a2)
+    */
     // a1 = NULL;
-    a2 = NULL; b = NULL
+    // a2 = NULL; b = NULL
 
     B* bs = gc_alloc_array(b_type, 3)
     for int i = 0; i < 3; i++ do
@@ -151,10 +169,10 @@ void test0(void)
     for int i = 0; i < 3; i++ do
         test_equal_i(bs[i].j, i)
         test_equal_i(bs[i].a->i, 5)
-    bs = NULL; a1 = NULL
+    ///bs = NULL; a1 = NULL
 
-    free(a_type)
-    free(b_type)
+    free(a_type); a_type = NULL
+    free(b_type); b_type = NULL
 
 int tree_sum(void)
     Node* t = node(1, node(2, leaf(3), leaf(4)), node(5, leaf(6), leaf(7)))
@@ -163,19 +181,21 @@ int tree_sum(void)
     // gc_remove_root(t)
     return n
 
-void test1(void)
-    node_type = make_node_type()
-    printf("node_type = %p\n", node_type)
+void __attribute__((noinline)) test1(void)
+    if node_type == NULL do
+        node_type = make_node_type()
+        printf("node_type = %p\n", node_type)
     int n = tree_sum()
     printf("n = %d\n", n)
     test_equal_i(n, 1+2+3+4+5+6+7)
-    gc_collect()
+    // gc_collect()
     // print_allocations()
-    free(node_type)
+    free(node_type); node_type = NULL
 
-void test2(void)
-    node_type = make_node_type()
-    printf("node_type = %p\n", node_type)
+void __attribute__((noinline)) test2(void)
+    if node_type == NULL do
+        node_type = make_node_type()
+        printf("node_type = %p\n", node_type)
     Node* t = NULL
     for int i = 0; i < 10; i++ do
         t = node(i, t, NULL)
@@ -192,7 +212,7 @@ void test2(void)
     // mark_stack(); print_allocations()
     // mark_roots(); print_allocations()
     // sweep(); print_allocations()
-    free(node_type)
+    free(node_type); node_type = NULL
 
 Node* fill_tree(int i)
     if i <= 0 do
@@ -200,9 +220,10 @@ Node* fill_tree(int i)
     else
         return node(i, fill_tree(i - 1), fill_tree(i - 2))
 
-void test3(void)
-    node_type = make_node_type()
-    printf("node_type = %p\n", node_type)
+void __attribute__((noinline)) test3(void)
+    if node_type == NULL do
+        node_type = make_node_type()
+        printf("node_type = %p\n", node_type)
     Node* t = NULL
     /*
     for int i = 0; i < 100000; i++ do
@@ -230,11 +251,32 @@ void test3(void)
     printf("time: %g ms\n", time * 1000.0 / CLOCKS_PER_SEC);
     // gc_collect();
     // print_allocations()
-    free(node_type)
+    free(node_type); node_type = NULL
 
-int main(int argc, char* argv[])
-    gc_set_bottom_of_stack(&argv)
+int main(void)
+    PLf("frame address = %p", __builtin_frame_address(0))
+    gc_set_bottom_of_stack(__builtin_frame_address(0))
+
+    #if 0
+    // Limit address space (in bytes)
+    struct rlimit limit
+    int err = getrlimit(RLIMIT_AS, &limit)
+    printf("%d, %d, %llu, %llu\n", err, errno, limit.rlim_cur, limit.rlim_max)
+    assert("no error", err == 0)
+
+    limit.rlim_cur = 34950000000
+    limit.rlim_max = RLIM_INFINITY
+    err = setrlimit(RLIMIT_AS, &limit)
+    printf("%d, %d, %llu, %llu\n", err, errno, limit.rlim_cur, limit.rlim_max)
+    assert("no error", err == 0)
+
+    err = getrlimit(RLIMIT_AS, &limit)
+    printf("%d, %d, %llu, %llu\n", err, errno, limit.rlim_cur, limit.rlim_max)
+    assert("no error", err == 0)
+    #endif
+
     test0()
+    PLs("main")
     gc_collect()
     test_equal_i(gc_is_empty(), true)
     test1()
@@ -246,4 +288,5 @@ int main(int argc, char* argv[])
     test3()
     gc_collect()
     test_equal_i(gc_is_empty(), true)
+
     return 0
