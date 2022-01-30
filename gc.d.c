@@ -258,7 +258,7 @@ void mark_roots(void)
 /*
 Marks registers and returns its own frame address. mark_registers has its own
 stack frame (noinline). It is called by mark_stack and thus its frame address is
-below (in memory) the frame of mark_stack. The frame address of mark_stack
+below (in memory) the frame of mark_stack. The frame address of mark_registers
 serves as the top_of_stack (lowest address) for scanning the stack.
 */
 uint64_t* __attribute__((noinline)) mark_registers(void)
@@ -300,7 +300,6 @@ uint64_t* __attribute__((noinline)) mark_registers(void)
             if is_alloc_aligned(a) && tr_contains(allocations, a) do
                 PLf("found allocation: p = %p, a = %p", p, a)
                 mark(a)
-    end. for
     ensure("aligned pointer", top_of_stack != NULL && ((uint64_t)top_of_stack & 7) == 0)
     return top_of_stack
 
@@ -379,7 +378,7 @@ void test_alignment(void)
     PLf("&k = %p, &l = %p, &m = %p, %llu", 
         &k, &l, &m, (uint64_t)&k - (uint64_t)&m)
 
-int xmain(int argc, char* argv[])
-    gc_set_bottom_of_stack(&argv)
+int xmain(void)
+    gc_set_bottom_of_stack(__builtin_frame_address(0))
     test_alignment()
     return 0
