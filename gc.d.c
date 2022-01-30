@@ -102,9 +102,11 @@ uint64_t* bottom_of_stack = NULL
 
 // Allocates an object of the given type.
 *void* gc_alloc_object(GCType* type)
+    // static int counter = 0
     require_not_null(type)
     Allocation* a = calloc(1, sizeof(Allocation) + type->size)
-    // gc_collect() // stress test collection
+    // stress test collection
+    // counter++; if (counter % 11) == 1 do gc_collect()
     if a == NULL do
         // if could not get memory, collect and try again
         gc_collect()
@@ -290,7 +292,7 @@ uint64_t* __attribute__((noinline)) mark_registers(void)
     assert("aligned buf", ((uint64_t)&buf & 7) == 0)
     memset(&buf, 0, sizeof(jmp_buf))
     setjmp(buf) // save the contents of callee-saved registers
-    uint64_t* p = (uint64_t*)&buf
+    uint64_t* p = (uint64_t*)buf
     uint64_t* q = p + sizeof(jmp_buf) / sizeof(uint64_t)
     for ; p < q; p++ do
         if *p != 0 do
