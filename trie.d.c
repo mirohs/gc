@@ -24,9 +24,18 @@ struct Node
 
 // int allocated_nodes = 0
 
+*void gc_collect(void)
+
 Node* new_node(void)
     // allocated_nodes++
-    return xcalloc(1, sizeof(Node))
+    // return xcalloc(1, sizeof(Node))
+    Node* node = calloc(1, sizeof(Node))
+    if node == NULL do
+        // if could not get memory, collect and try again
+        gc_collect()
+        // use xcalloc here to stop if fails again
+        node = xcalloc(1, sizeof(Node))
+    return node
 
 *bool trie_is_empty(uint64_t t)
     return is_empty(t)
@@ -76,7 +85,7 @@ Node* new_node(void)
                 level++
 
 *bool trie_contains(uint64_t t, uint64_t x, int level)
-    require("not null", x != 0)
+    if x == 0 do return false
     require("is value", is_value(x))
     require("not negative", level >= 0)
     loop:
