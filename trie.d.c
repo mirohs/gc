@@ -180,7 +180,7 @@ void trie_size(uint64_t t, int level, int* count, int* max_level, double* mean_l
             for int i = 0; i < slot_count; i++ do
                 trie_print(node->slots[i], level + 1, i)
 
-*typedef bool (*TrieVisitFn)(uint64_t x);
+*typedef bool (*TrieVisitFn)(uint64_t x)
 
 *void trie_visit(uint64_t* t, TrieVisitFn f)
     require_not_null(t)
