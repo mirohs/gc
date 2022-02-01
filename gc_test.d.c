@@ -225,13 +225,16 @@ void __attribute__((noinline)) test3(void)
         node_type = make_node_type()
         printf("node_type = %p\n", node_type)
     Node* t = NULL
+    clock_t time = clock();
     /*
     for int i = 0; i < 100000; i++ do
         t = node(i, t, NULL)
         // t = NULL
+        if (i % 123) == 0 do
+            t = NULL
+            gc_collect()
     */
-    clock_t time = clock();
-    t = fill_tree(30)
+    t = fill_tree(24)
     time = clock() - time;
     printf("time: %g ms\n", time * 1000.0 / CLOCKS_PER_SEC);
     /*
@@ -271,6 +274,23 @@ int main(void)
     assert("no error", err == 0)
 
     err = getrlimit(RLIMIT_AS, &limit)
+    printf("%d, %d, %llu, %llu\n", err, errno, limit.rlim_cur, limit.rlim_max)
+    assert("no error", err == 0)
+    #endif
+
+    #if 1
+    // Limit address space (in bytes)
+    struct rlimit limit
+    int err = getrlimit(RLIMIT_STACK, &limit) // 8388608
+    printf("%d, %d, %llu, %llu\n", err, errno, limit.rlim_cur, limit.rlim_max)
+    assert("no error", err == 0)
+
+    limit.rlim_cur = 10000
+    err = setrlimit(RLIMIT_STACK, &limit)
+    printf("%d, %d, %llu, %llu\n", err, errno, limit.rlim_cur, limit.rlim_max)
+    assert("no error", err == 0)
+
+    err = getrlimit(RLIMIT_STACK, &limit)
     printf("%d, %d, %llu, %llu\n", err, errno, limit.rlim_cur, limit.rlim_max)
     assert("no error", err == 0)
     #endif

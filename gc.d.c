@@ -102,10 +102,10 @@ uint64_t* bottom_of_stack = NULL
 
 // Allocates an object of the given type.
 *void* gc_alloc_object(GCType* type)
-    // static int counter = 0
     require_not_null(type)
     Allocation* a = calloc(1, sizeof(Allocation) + type->size)
     // stress test collection
+    // static int counter = 0
     // counter++; if (counter % 11) == 1 do gc_collect()
     if a == NULL do
         // if could not get memory, collect and try again
@@ -218,33 +218,61 @@ bool f_sweep(uint64_t x)
 void sweep(void)
     trie_visit(&allocations, f_sweep)
 
+typedef struct MarkStack MarkStack
+struct MarkStack
+    Allocation* a
+    MarkStack* next
+
+MarkStack* markstack = NULL
+
+void markstack_push(Allocation* a)
+    require_not_null(a)
+    MarkStack* ms = xmalloc(sizeof(MarkStack))
+    ms->a = a
+    ms->next = markstack
+    markstack = ms
+
+Allocation* markstack_pop(void)
+    require_not_null(markstack)
+    Allocation* a = markstack->a
+    MarkStack* ms = markstack->next
+    free(markstack)
+    markstack = ms
+    return a
+
+bool markstack_isempty(void)
+    return markstack == NULL
+
 // Marks all allocations reachable from a, including a itself.
 void mark(Allocation* a)
-    PLf("frame address = %p", __builtin_frame_address(0))
-    require_not_null(a)
-    require("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
-    PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
-    if a->marked do return
-    a->marked = true
-    GCType* t = a->type
-    if t == NULL do return
-    char* element = a->object
-    int n = a->count
-    if n == 0 do n = 1
-    int m = t->pointer_count
-    int element_size = t->size
-    int* pointers = t->pointers
-    for int i = 0; i < n; i++ do // for all elements
-        for int j = 0; j < m; j++ do // for each pointer in i-th element
-            PLf("i = %d, j = %d", i, j)
-            int p = pointers[j]
-            char* pj = *(char**)(element + p)
-            if pj != NULL do
-                a = allocation_address(pj)
-                PLf("pj = %p, a = %p, count = %d, marked = %d", pj, a, a->count, a->marked)
-                assert("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
-                mark(a)
-        element += element_size
+    markstack_push(a)
+    while !markstack_isempty() do
+        a = markstack_pop()
+        PLf("frame address = %p", __builtin_frame_address(0))
+        require_not_null(a)
+        require("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
+        PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
+        if a->marked do return
+        a->marked = true
+        GCType* t = a->type
+        if t == NULL do return
+        char* element = a->object
+        int n = a->count
+        if n == 0 do n = 1
+        int m = t->pointer_count
+        int element_size = t->size
+        int* pointers = t->pointers
+        for int i = 0; i < n; i++ do // for all elements
+            for int j = 0; j < m; j++ do // for each pointer in i-th element
+                PLf("i = %d, j = %d", i, j)
+                int p = pointers[j]
+                char* pj = *(char**)(element + p)
+                if pj != NULL do
+                    a = allocation_address(pj)
+                    PLf("pj = %p, a = %p, count = %d, marked = %d", pj, a, a->count, a->marked)
+                    assert("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
+                    markstack_push(a)
+            element += element_size
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)
