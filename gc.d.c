@@ -61,6 +61,8 @@ offset "object".
 struct Allocation
     bool marked // set by mark (if this allocation is reachable) and cleared by sweep
     int count // number of array elements or 0
+    int i, j
+    Allocation* parent
     GCType* type // type of the user object or NULL
     char object[] // <-- user object starts here
 
@@ -205,19 +207,24 @@ pointer table is initialized to zeros.
 Sweeps the marked allocations and either clears the mark or deletes the
 allocation.
 */
+//int sc = 0
 bool f_sweep(uint64_t x)
     Allocation* a = (Allocation*)(x << 3)
     if a->marked do
         a->marked = false
         return true // keep
     else
+        //sc++
         PLf("free a = %p, o = %p", a, a->object)
         // printf("free a = %p, o = %p\n", a, a->object)
         free(a)
         return false // remove
 void sweep(void)
+    //sc = 0
     trie_visit(&allocations, f_sweep)
+    //printf("sc = %d\n", sc)
 
+/*
 typedef struct MarkStack MarkStack
 struct MarkStack
     Allocation* a
@@ -244,7 +251,7 @@ bool markstack_isempty(void)
     return markstack == NULL
 
 // Marks all allocations reachable from a, including a itself.
-void mark(Allocation* a)
+void mark0(Allocation* a)
     markstack_push(a)
     while !markstack_isempty() do
         a = markstack_pop()
@@ -262,17 +269,59 @@ void mark(Allocation* a)
         int m = t->pointer_count
         int element_size = t->size
         int* pointers = t->pointers
-        for int i = 0; i < n; i++ do // for all elements
-            for int j = 0; j < m; j++ do // for each pointer in i-th element
+        for int i = a->i; i < n; i++ do // for all elements
+            for int j = a->j; j < m; j++ do // for each pointer in i-th element
                 PLf("i = %d, j = %d", i, j)
                 int p = pointers[j]
                 char* pj = *(char**)(element + p)
                 if pj != NULL do
-                    a = allocation_address(pj)
-                    PLf("pj = %p, a = %p, count = %d, marked = %d", pj, a, a->count, a->marked)
-                    assert("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
+                    Allocation* aj = allocation_address(pj)
+                    PLf("pj = %p, a = %p, count = %d, marked = %d", pj, aj, aj->count, aj->marked)
+                    assert("is allocation", is_alloc_aligned(aj) && tr_contains(allocations, aj))
                     markstack_push(a)
             element += element_size
+
+*/
+
+// Marks all allocations reachable from a, including a itself.
+void mark(Allocation* a)
+    PLf("frame address = %p", __builtin_frame_address(0))
+    require_not_null(a)
+    require("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
+    PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
+    a->parent = NULL
+    call:
+    if a->marked do
+        a = a->parent
+        if a == NULL do return
+        goto return_from_call
+    a->marked = true
+    GCType* t = a->type
+    if t == NULL do
+        a = a->parent
+        if a == NULL do return
+        goto return_from_call
+    char* element = a->object
+    int n = a->count
+    if n == 0 do n = 1
+    int m = t->pointer_count
+    int element_size = t->size
+    int* pointers = t->pointers
+    for int i = 0; i < n; i++ do // for all elements
+        for int j = 0; j < m; j++ do // for each pointer in i-th element
+            PLf("i = %d, j = %d", i, j)
+            int p = pointers[j]
+            char* pj = *(char**)(element + p)
+            if pj != NULL do
+                Allocation* aj = allocation_address(pj)
+                PLf("pj = %p, a = %p, count = %d, marked = %d\n", pj, aj, aj->count, aj->marked)
+                assert("is allocation", is_alloc_aligned(aj) && tr_contains(allocations, aj))
+                //mark(a)
+                a->i = i; a->j = j; aj->parent = a; a = aj
+                goto call
+                return_from_call:
+                i = a->i; j = a->j
+        element += element_size
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)
