@@ -207,81 +207,18 @@ pointer table is initialized to zeros.
 Sweeps the marked allocations and either clears the mark or deletes the
 allocation.
 */
-//int sc = 0
 bool f_sweep(uint64_t x)
     Allocation* a = (Allocation*)(x << 3)
     if a->marked do
         a->marked = false
         return true // keep
     else
-        //sc++
         PLf("free a = %p, o = %p", a, a->object)
         // printf("free a = %p, o = %p\n", a, a->object)
         free(a)
         return false // remove
 void sweep(void)
-    //sc = 0
     trie_visit(&allocations, f_sweep)
-    //printf("sc = %d\n", sc)
-
-/*
-typedef struct MarkStack MarkStack
-struct MarkStack
-    Allocation* a
-    MarkStack* next
-
-MarkStack* markstack = NULL
-
-void markstack_push(Allocation* a)
-    require_not_null(a)
-    MarkStack* ms = xmalloc(sizeof(MarkStack))
-    ms->a = a
-    ms->next = markstack
-    markstack = ms
-
-Allocation* markstack_pop(void)
-    require_not_null(markstack)
-    Allocation* a = markstack->a
-    MarkStack* ms = markstack->next
-    free(markstack)
-    markstack = ms
-    return a
-
-bool markstack_isempty(void)
-    return markstack == NULL
-
-// Marks all allocations reachable from a, including a itself.
-void mark0(Allocation* a)
-    markstack_push(a)
-    while !markstack_isempty() do
-        a = markstack_pop()
-        PLf("frame address = %p", __builtin_frame_address(0))
-        require_not_null(a)
-        require("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
-        PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
-        if a->marked do return
-        a->marked = true
-        GCType* t = a->type
-        if t == NULL do return
-        char* element = a->object
-        int n = a->count
-        if n == 0 do n = 1
-        int m = t->pointer_count
-        int element_size = t->size
-        int* pointers = t->pointers
-        for int i = a->i; i < n; i++ do // for all elements
-            for int j = a->j; j < m; j++ do // for each pointer in i-th element
-                PLf("i = %d, j = %d", i, j)
-                int p = pointers[j]
-                char* pj = *(char**)(element + p)
-                if pj != NULL do
-                    Allocation* aj = allocation_address(pj)
-                    PLf("pj = %p, a = %p, count = %d, marked = %d", pj, aj, aj->count, aj->marked)
-                    assert("is allocation", is_alloc_aligned(aj) && tr_contains(allocations, aj))
-                    markstack_push(a)
-            element += element_size
-
-*/
 
 // Marks all allocations reachable from a, including a itself.
 void mark(Allocation* a)
