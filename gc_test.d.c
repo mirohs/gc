@@ -174,11 +174,27 @@ void __attribute__((noinline)) test0(void)
     free(a_type); a_type = NULL
     free(b_type); b_type = NULL
 
+int tree_count(Node* t)
+    if t == NULL do return 0
+    return tree_count(t->left) + 1 + tree_count(t->right)
+
 int tree_sum(void)
-    Node* t = node(1, node(2, leaf(3), leaf(4)), node(5, leaf(6), leaf(7)))
+    Node* t = node(1,
+                   node(2,
+                        leaf(3),
+                        leaf(4)),
+                   node(5,
+                        leaf(6),
+                        leaf(7)))
     // gc_add_root(t)
     int n = sum_tree(t)
     // gc_remove_root(t)
+    test_equal_i(tree_count(t), 7)
+    gc_collect()
+    test_equal_i(tree_count(t), 7)
+    t->right->left = NULL
+    gc_collect()
+    test_equal_i(tree_count(t), 6)
     return n
 
 void __attribute__((noinline)) test1(void)
@@ -227,10 +243,10 @@ void __attribute__((noinline)) test3(void)
     Node* t = NULL
     clock_t time = clock();
     /*
-    for int i = 0; i < 100000; i++ do
+    for int i = 0; i < 10000000; i++ do
         t = node(i, t, NULL)
         // t = NULL
-        if (i % 123) == 0 do
+        if (i % 123) == 990 do
             t = NULL
             gc_collect()
     */
