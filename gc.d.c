@@ -53,14 +53,14 @@ struct GCType
 /*
 Allocation represents the header of a single memory block that is allocated for
 management by this garbage collector. If the user object is an array, then count
-> 0, otherwise count == 0. The type attribute is the type of the user object or
+>= 1, otherwise count == 1. The type attribute is the type of the user object or
 NULL if the user object does not contain any pointers to dynamically allocated
 memory (to be managed by the garbage collector). The user object starts at
 offset "object".
 */
 struct Allocation
     bool marked // set by mark (if this allocation is reachable) and cleared by sweep
-    int count // number of array elements or 0
+    int count // number of array elements (>= 1) or 1
     int i, j // loop state, used in mark to avoid recursion
     Allocation* parent // predecessor in implicit stack, used in mark to avoid recursion
     GCType* type // type of the user object or NULL
@@ -226,33 +226,34 @@ void mark(Allocation* a)
     require_not_null(a)
     require("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
     PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
-    a->parent = NULL
-    call:
-    if a->marked do
-        a = a->parent
-        if a == NULL do return
-        goto return_from_call
+    if a->marked do return
     a->marked = true
     GCType* t = a->type
-    if t == NULL do
+    if t == NULL do return
+    a->parent = NULL
+    a->i = 0; a->j = 0
+    while a != NULL do
+        int i = a->i, j = a->j
+        while i < a->count do // for all elements
+            while j < t->pointer_count do // for each pointer in i-th element
+                PLf("i = %d, j = %d", i, j)
+                int offset = t->pointers[j]
+                char* pj = *(char**)(a->object + i * t->size + offset)
+                if pj != NULL do
+                    Allocation* aj = allocation_address(pj)
+                    assert("is allocation", is_alloc_aligned(aj) && tr_contains(allocations, aj))
+                    PLf("pj = %p, a = %p, count = %d, marked = %d\n", pj, aj, aj->count, aj->marked)
+                    // mark(aj) <-- avoid recursion, capture loop state and process aj
+                    if !aj->marked do
+                        aj->marked = true
+                        if aj->type != NULL do
+                            a->i = i; a->j = j + 1; aj->parent = a
+                            a = aj; t = a->type
+                            i = -1; break
+                j++
+            j = 0; i++
         a = a->parent
-        if a == NULL do return
-        goto return_from_call
-    for int i = 0; i < a->count; i++ do // for all elements
-        for int j = 0; j < t->pointer_count; j++ do // for each pointer in i-th element
-            PLf("i = %d, j = %d", i, j)
-            int offset = t->pointers[j]
-            char* pj = *(char**)(a->object + i * t->size + offset)
-            if pj != NULL do
-                Allocation* aj = allocation_address(pj)
-                PLf("pj = %p, a = %p, count = %d, marked = %d\n", pj, aj, aj->count, aj->marked)
-                assert("is allocation", is_alloc_aligned(aj) && tr_contains(allocations, aj))
-                // mark(a) <-- avoid recursion, capture loop state and go to beginning of function
-                a->i = i; a->j = j; aj->parent = a; a = aj
-                goto call
-                return_from_call:
-                i = a->i; j = a->j
-                t = a->type
+        if a != NULL do t = a->type
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)
