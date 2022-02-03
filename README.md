@@ -99,13 +99,13 @@ struct A
     char* t // managed
 
 // A needs a GCType, bacause it contains one pointer to managed memory (t).
-GCType* make_a_type(void)
-    GCType* type = gc_new_type(sizeof(A), 1)
+int make_a_type(void)
+    int type = gc_new_type(sizeof(A), 1)
     gc_set_offset(type, 0, offsetof(A, t))
     return type
 
 // Singleton type object for objects of type A.
-GCType* a_type
+int a_type = 0
 
 // Creates and initializes a new instance of type A.
 A* new_a(int i, char* s, char* t)
@@ -123,9 +123,9 @@ void print_a(A* a)
     printf("A(%d, %s, %s)\n", a->i, a->s, a->t)
 
 void test0(void)
-    if a_type == NULL do
+    if a_type == 0 do
         a_type = make_a_type()
-        printf("a_type = %p\n", a_type)
+        printf("a_type = %d\n", a_type)
 
     A* a1 = new_a(5, "hello", "world")
     print_a(a1)

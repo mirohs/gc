@@ -33,7 +33,7 @@ object.
 */
 #define allocation_address(o) ((Allocation*)((char*)(o) - offsetof(Allocation, object)))
 
-// Checks whether a is not NULL and 16-byte-aligned.
+// Checks whether a is not NULL and 16-byte aligned.
 #define is_alloc_aligned(a) ((a) != NULL && ((uint64_t)(a) & 0xf) == 0)
 
 typedef struct Type Type
@@ -61,7 +61,7 @@ offset "object".
 struct Allocation
     int count_type_marked // 24 bits count (number of array elements (>= 1) or 1)
                           // middle 7 bits type (at most 127 types), LSB mark
-    int i_j // iteration state, used in mark to avoid recursion
+    int i_j // iteration state, used in mark function to avoid recursion
            // upper 24 bits for i (element index), lower 8 bits for j (pointer index)
     char object[] // <-- user object starts here
 
@@ -199,7 +199,7 @@ pointer table is initialized to zeros.
 */
 *int gc_new_type(int size, int pointer_count)
     require("types not full", types_count < 0x7f)
-    require("valid range", 0 <= size && size <= 0xffffff)
+    require("not negative", size >= 0)
     require("valid range", 0 <= pointer_count && pointer_count <= 0xff)
     Type* t = xcalloc(1, sizeof(Type) + pointer_count * sizeof(int))
     t->size = size
