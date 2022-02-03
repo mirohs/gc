@@ -242,15 +242,15 @@ void __attribute__((noinline)) test3(void)
         printf("node_type = %p\n", node_type)
     Node* t = NULL
     clock_t time = clock();
-    /*
+    //
     for int i = 0; i < 10000000; i++ do
         t = node(i, t, NULL)
         // t = NULL
         if (i % 123) == 990 do
             t = NULL
             gc_collect()
-    */
-    t = fill_tree(24)
+    //
+    //t = fill_tree(24)
     time = clock() - time;
     printf("time: %g ms\n", time * 1000.0 / CLOCKS_PER_SEC);
     /*
@@ -271,6 +271,74 @@ void __attribute__((noinline)) test3(void)
     // gc_collect();
     // print_allocations()
     free(node_type); node_type = NULL
+
+typedef struct Node3 Node3
+struct Node3
+    int x
+    Node* a// managed
+    Node* b // managed
+    Node3* c // managed
+
+GCType* make_node3_type(void)
+    GCType* type = gc_new_type(sizeof(Node3), 3)
+    gc_set_offset(type, 0, offsetof(Node3, a))
+    gc_set_offset(type, 1, offsetof(Node3, b))
+    gc_set_offset(type, 2, offsetof(Node3, c))
+    return type
+
+GCType* node3_type = NULL
+
+Node3* node3(int x, Node* a, Node* b, Node3* c)
+    require_not_null(node3_type)
+    Node3* node = gc_alloc_object(node3_type)
+    node->x = x
+    node->a = a
+    node->b = b
+    node->c = c
+    return node
+
+int tree3_count(Node3* t)
+    if t == NULL do return 0
+    return 1 + tree_count(t->a) + tree_count(t->b) + tree3_count(t->c)
+
+int freed_count = 0
+int test_freed_count = 0
+
+void __attribute__((noinline)) test4(void)
+    if node_type == NULL do
+        node_type = make_node_type()
+        printf("node_type = %p\n", node_type)
+    if node3_type == NULL do
+        node3_type = make_node3_type()
+        printf("node3_type = %p\n", node3_type)
+
+    Node3* t = node3(1,
+                   node(2,
+                        leaf(3),
+                        leaf(4)),
+                   node(5,
+                        leaf(6),
+                        leaf(7)),
+                   node3(8,
+                        leaf(9),
+                        leaf(10),
+                        node3(11, NULL, NULL, NULL)))
+
+    test_equal_i(tree3_count(t), 11)
+    gc_collect()
+    printf("freed %d objects\n", freed_count)
+    test_freed_count = freed_count
+    test_equal_i(tree3_count(t), 11)
+    t->c = NULL
+    gc_collect()
+    printf("freed %d objects\n", freed_count)
+    test_freed_count += freed_count
+    test_equal_i(tree3_count(t), 7)
+    t->b->left = NULL
+    gc_collect()
+    printf("freed %d objects\n", freed_count)
+    test_freed_count += freed_count
+    test_equal_i(tree3_count(t), 6)
 
 int main(void)
     PLf("frame address = %p", __builtin_frame_address(0))
@@ -324,92 +392,11 @@ int main(void)
     test3()
     gc_collect()
     test_equal_i(gc_is_empty(), true)
+    test4()
+    gc_collect()
+    printf("freed %d objects\n", test_freed_count)
+    test_freed_count += freed_count
+    // test_equal_i(test_freed_count, 11)
+    test_equal_i(gc_is_empty(), true)
 
     return 0
-/*
-If test0 is inlined, then the stack order in main is:
-    frame_address == bottom_of_stack (highest address)	0x7ff7bd255e10
-    argc												0x7ff7bd255dfc
-    argv												0x7ff7bd255df0
-    a1													0x7ff7bd255de8
-    ...
-    top_of_stack (lowest address)						0x7ff7bd255cf0
-
-This means that when setting frame_address as bottom of stack (highest address),
-a1 will be in the scanning range and will be found by mark_stack.
-
-int main(int argc, char* argv[]) {
-    printf("%p, %p\n", &argc, &argv); // stack order: frame_address, argc, a1, argv
-    //gc_set_bottom_of_stack(&argv);
-    void* p = __builtin_frame_address(0);
-    printf("%p\n", p);
-    gc_set_bottom_of_stack(p);
-    
-    // test0(); (inlined)
-    a_type = make_a_type();
-    printf("a_type = %p\n", a_type);
-    A* a1 = new_a(5, "hello", "world");
-    print_a(a1);
-    a1 = NULL;
-    printf("&a1 = %p\n", &a1);
-
-    PLs("main");
-    gc_collect();
-    test_equal_i(gc_is_empty(), true);
-    return 0; }
-
-When avoiding inlining via:
-static __attribute__((noinline)) void test0(void) {...}
-Then the stack in main looks like this:
-    frame_address == bottom_of_stack (highest address)	0x7ff7bb3c4e10
-    argc												0x7ff7bb3c4e0c
-    argv												0x7ff7bb3c4e00
-    ...
-    a1													0x7ff7bb3c4dd8 (overwritten)
-    top_of_stack (lowest address)						0x7ff7bb3c4d10
-
-Strange, &a1 should no be between tos and bos!
-
-
-inlined
-fa main  = 0x7ff7b4f73e10 (bos)
-fa test0 = 0x7ff7b4f73e10
-argc     = 0x7ff7b4f73dfc
-argv     = 0x7ff7b4f73df0
-a1       = 0x7ff7b4f73de8
-...
-tos      = 0x7ff7b4f73cf0
-
-not inlined
-fa main  = 0x7ff7b91bae10 (bos)
-argc     = 0x7ff7b91bae0c
-argv     = 0x7ff7b91bae00
-fa test0 = 0x7ff7b91badf0
-a1       = 0x7ff7b91badd8 (overwritten)
-tos      = 0x7ff7b91bad10
-
-
-inlined
-main:254: 0x7ff7b36bedec, 0x7ff7b36bede0
-main:257: fa main               = 0x7ff7b36bee10
-test0:131: fa test0             = 0x7ff7b36bee10
-test0:143: &a1                  = 0x7ff7b36bedd8
-gc_collect:295: fa              = 0x7ff7b36bedc0
-mark_stack:258: fa              = 0x7ff7b36beda0
-mark_stack:272: bottom_of_stack = 0x7ff7b36bee10
-mark_stack:273: top_of_stack    = 0x7ff7b36becd0 40
-mark:218: fa                    = 0x7ff7b36becc0
-mark:218: fa                    = 0x7ff7b36bec60
-mark:218: fa                    = 0x7ff7b36becc0
-
-not inlined
-main:254: 0x7ff7b20e5df4, 0x7ff7b20e5de8
-main:257: fa                    = 0x7ff7b20e5e10
-test0:131: fa                   = 0x7ff7b20e5dd0
-test0:143: &a1                  = 0x7ff7b20e5db8
-gc_collect:295: fa              = 0x7ff7b20e5dd0
-mark_stack:258: fa              = 0x7ff7b20e5db0
-mark_stack:272: bottom_of_stack = 0x7ff7b20e5e10
-mark_stack:273: top_of_stack    = 0x7ff7b20e5ce0 38
-
-*/
