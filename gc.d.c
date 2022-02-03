@@ -61,8 +61,8 @@ offset "object".
 struct Allocation
     bool marked // set by mark (if this allocation is reachable) and cleared by sweep
     int count // number of array elements or 0
-    int i, j
-    Allocation* parent
+    int i, j // loop state, used in mark to avoid recursion
+    Allocation* parent // predecessor in implicit stack, used in mark to avoid recursion
     GCType* type // type of the user object or NULL
     char object[] // <-- user object starts here
 
@@ -94,7 +94,7 @@ uint64_t* bottom_of_stack = NULL
         // use xcalloc here to stop if fails again
         a = xcalloc(1, sizeof(Allocation) + size)
     // a->marked = false
-    // a->count = 0
+    a->count = 1
     // a->type = NULL
     assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
@@ -115,7 +115,7 @@ uint64_t* bottom_of_stack = NULL
         // use xcalloc here to stop if fails again
         a = xcalloc(1, sizeof(Allocation) + type->size)
     // a->marked = false
-    // a->count = 0
+    a->count = 1
     a->type = type
     assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
@@ -238,27 +238,21 @@ void mark(Allocation* a)
         a = a->parent
         if a == NULL do return
         goto return_from_call
-    char* element = a->object
-    int n = a->count
-    if n == 0 do n = 1
-    int m = t->pointer_count
-    int element_size = t->size
-    int* pointers = t->pointers
-    for int i = 0; i < n; i++ do // for all elements
-        for int j = 0; j < m; j++ do // for each pointer in i-th element
+    for int i = 0; i < a->count; i++ do // for all elements
+        for int j = 0; j < t->pointer_count; j++ do // for each pointer in i-th element
             PLf("i = %d, j = %d", i, j)
-            int p = pointers[j]
-            char* pj = *(char**)(element + p)
+            int offset = t->pointers[j]
+            char* pj = *(char**)(a->object + i * t->size + offset)
             if pj != NULL do
                 Allocation* aj = allocation_address(pj)
                 PLf("pj = %p, a = %p, count = %d, marked = %d\n", pj, aj, aj->count, aj->marked)
                 assert("is allocation", is_alloc_aligned(aj) && tr_contains(allocations, aj))
-                //mark(a)
+                // mark(a) <-- avoid recursion, capture loop state and go to beginning of function
                 a->i = i; a->j = j; aj->parent = a; a = aj
                 goto call
                 return_from_call:
                 i = a->i; j = a->j
-        element += element_size
+                t = a->type
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)
