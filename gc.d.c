@@ -36,16 +36,16 @@ object.
 // Checks whether a is not NULL and 16-byte-aligned.
 #define is_alloc_aligned(a) ((a) != NULL && ((uint64_t)(a) & 0xf) == 0)
 
-*typedef struct GCType GCType
+typedef struct Type Type
 typedef struct Allocation Allocation
 
 *void gc_collect(void)
 
 /*
-GCType describes an object in terms of its size and in terms of the offsets of
+Type describes an object in terms of its size and in terms of the offsets of
 pointers to dynamically allocated (and managed) memory that it contains.
 */
-struct GCType
+struct Type
     int size // byte size of an object of this type
     int pointer_count // number of pointers that an object of this type contains
     int pointers[] // byte offsets of pointers
@@ -59,19 +59,24 @@ memory (to be managed by the garbage collector). The user object starts at
 offset "object".
 */
 struct Allocation
-    int count // number of array elements (>= 1) or 1
-    int ij // iteration state, used in mark to avoid recursion
-           // upper 24 bits for i, lower 8 bits for j
-    uint64_t type // type of the user object or NULL, marked-bit in lowest bit
+    int count_type_marked // 24 bits count (number of array elements (>= 1) or 1)
+                          // middle 7 bits type (at most 127 types), LSB mark
+    int i_j // iteration state, used in mark to avoid recursion
+           // upper 24 bits for i (element index), lower 8 bits for j (pointer index)
     char object[] // <-- user object starts here
 
-#define is_marked(a) (a->type & 1)
-#define set_marked(a) a->type |= 1
-#define clear_marked(a) a->type &= ~1
-#define get_type(a) (GCType*)(a->type & ~1)
-#define get_i(a) ((a->ij >> 8) & 0xffffff)
-#define get_j(a) (a->ij & 0xff)
-#define set_ij(a, i, j) a->ij = ((i << 8) | j)
+#define is_marked(a) (a->count_type_marked & 1)
+#define set_marked(a) a->count_type_marked |= 1
+#define clear_marked(a) a->count_type_marked &= ~1
+#define get_i(a) ((a->i_j >> 8) & 0xffffff)
+#define get_j(a) (a->i_j & 0xff)
+#define set_i_j(a, i, j) a->i_j = ((i << 8) | j)
+#define get_count(a) ((a->count_type_marked >> 8) & 0xffffff)
+#define get_type(a) ((a->count_type_marked >> 1) & 0x7f)
+#define set_count_type(a, count, type) a->count_type_marked = ((count << 8) | (type << 1))
+
+Type* types[0x80]
+int types_count = 0
 
 // The trie of all allocations.
 uint64_t allocations = 0
@@ -100,9 +105,7 @@ uint64_t* bottom_of_stack = NULL
         gc_collect()
         // use xcalloc here to stop if fails again
         a = xcalloc(1, sizeof(Allocation) + size)
-    // a->marked = false
-    a->count = 1
-    // a->type = NULL
+    set_count_type(a, 1, 0) // count, type
     assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
@@ -110,9 +113,10 @@ uint64_t* bottom_of_stack = NULL
     return a->object
 
 // Allocates an object of the given type.
-*void* gc_alloc_object(GCType* type)
-    require_not_null(type)
-    Allocation* a = calloc(1, sizeof(Allocation) + type->size)
+*void* gc_alloc_object(int type)
+    require("valid type", 1 <= type && type <= types_count)
+    int size = types[type]->size
+    Allocation* a = calloc(1, sizeof(Allocation) + size)
     // stress test collection
     // static int counter = 0
     // counter++; if (counter % 11) == 1 do gc_collect()
@@ -120,33 +124,31 @@ uint64_t* bottom_of_stack = NULL
         // if could not get memory, collect and try again
         gc_collect()
         // use xcalloc here to stop if fails again
-        a = xcalloc(1, sizeof(Allocation) + type->size)
-    // a->marked = false
-    a->count = 1
-    a->type = (uint64_t)type
+        a = xcalloc(1, sizeof(Allocation) + size)
+    set_count_type(a, 1, type)
     assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
-    PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
+    PLf("a = %p, o = %p, type = %p", a, a->object, types[type])
     ensure("inserted", tr_contains(allocations, a))
     return a->object
 
 // Allocates an array of count objects of the given type.
-*void* gc_alloc_array(GCType* type, int count)
-    require_not_null(type)
+*void* gc_alloc_array(int type, int count)
+    require("valid type", 1 <= type && type <= types_count)
     require("positive", count > 0)
-    Allocation* a = calloc(1, sizeof(Allocation) + count * type->size)
+    int size = types[type]->size
+    Allocation* a = calloc(1, sizeof(Allocation) + count * size)
     // gc_collect() // stress test collection
     if a == NULL do
         // if could not get memory, collect and try again
         gc_collect()
         // use xcalloc here to stop if fails again
-        a = xcalloc(1, sizeof(Allocation) + count * type->size)
+        a = xcalloc(1, sizeof(Allocation) + count * size)
     // a->marked = false
-    a->count = count
-    a->type = (uint64_t)type
+    set_count_type(a, count, type)
     assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
-    PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
+    PLf("a = %p, o = %p, type = %p", a, a->object, types[type])
     ensure("inserted", tr_contains(allocations, a))
     return a->object
 
@@ -179,7 +181,7 @@ uint64_t* bottom_of_stack = NULL
 // Prints the current allocations.
 bool f_print(uint64_t x)
     Allocation* a = (Allocation*)(x << 3)
-    printf("\ta = %p, o = %p, count = %d, marked = %llu\n", a, a->object, a->count, is_marked(a))
+    printf("\ta = %p, o = %p, count = %d, marked = %d\n", a, a->object, get_count(a), is_marked(a))
     return true
 void print_allocations(void)
     printf("print_allocations:\n")
@@ -191,24 +193,28 @@ void print_allocations(void)
 /*
 Allocates a new type with the given size of the user object and the given number
 of pointers to dynamically allocated content that is managed by the garbage
-collector. GCType itself is dynamically allocated, but not garbage collected. The
+collector. Type itself is dynamically allocated, but not garbage collected. The
 size should respect the requirements of alignment, if used with arrays. The
 pointer table is initialized to zeros.
 */
-*GCType* gc_new_type(int size, int pointer_count)
+*int gc_new_type(int size, int pointer_count)
+    require("types not full", types_count < 0x7f)
     require("valid range", 0 <= size && size <= 0xffffff)
     require("valid range", 0 <= pointer_count && pointer_count <= 0xff)
-    GCType* t = xcalloc(1, sizeof(GCType) + pointer_count * sizeof(int))
+    Type* t = xcalloc(1, sizeof(Type) + pointer_count * sizeof(int))
     t->size = size
     t->pointer_count = pointer_count
-    return t
+    types_count++
+    types[types_count] = t
+    return types_count
 
 // Sets the offset of i-th the pointer to managed memory.
-*void gc_set_offset(GCType* type, int index, int offset)
-    require_not_null(type)
-    require("valid index", 0 <= index && index < type->pointer_count)
-    require("valid offset", 0 <= offset && offset + sizeof(void*) <= type->size)
-    type->pointers[index] = offset
+*void gc_set_offset(int type, int index, int offset)
+    require("valid type", 1 <= type && type <= types_count)
+    Type* t = types[type]
+    require("valid index", 0 <= index && index < t->pointer_count)
+    require("valid offset", 0 <= offset && offset + sizeof(void*) <= t->size)
+    t->pointers[index] = offset
 
 /*
 Sweeps the marked allocations and either clears the mark or deletes the
@@ -238,14 +244,14 @@ void mark(Allocation* a)
     PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, is_marked(a))
     if is_marked(a) do return
     set_marked(a)
-    GCType* t = get_type(a)
+    Type* t = types[get_type(a)]
     if t == NULL do return
-    a->ij = 0
+    a->i_j = 0
     Allocation* a_prev = NULL
     while a != NULL do
         int i = get_i(a)
         int j = get_j(a)
-        while i < a->count do // for all elements
+        while i < get_count(a) do // for all elements
             while j < t->pointer_count do // for each pointer in i-th element
                 PLf("i = %d, j = %d", i, j)
                 int offset = t->pointers[j]
@@ -258,10 +264,10 @@ void mark(Allocation* a)
                     // mark(aj) <-- avoid recursion, capture loop state and process aj
                     if !is_marked(aj) do
                         set_marked(aj)
-                        GCType* tj = get_type(aj)
+                        Type* tj = types[get_type(aj)]
                         if tj != NULL do
                             *ppj = (char*)a_prev
-                            set_ij(a, i, j); a_prev = a
+                            set_i_j(a, i, j); a_prev = a
                             a = aj; t = tj
                             i = -1; break
                 j++
@@ -269,7 +275,7 @@ void mark(Allocation* a)
         Allocation* aj = a
         a = a_prev
         if a != NULL do
-            t = get_type(a)
+            t = types[get_type(a)]
             int i = get_i(a)
             int j = get_j(a)
             int offset = t->pointers[j]
@@ -280,7 +286,7 @@ void mark(Allocation* a)
             if j >= t->pointer_count do
                 i++
                 j = 0
-            set_ij(a, i, j)
+            set_i_j(a, i, j)
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)

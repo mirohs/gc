@@ -36,20 +36,20 @@ struct A
     char* t // managed
 
 // A needs a GCType, bacause it contains one pointer to managed memory (t).
-GCType* make_a_type(void)
-    GCType* type = gc_new_type(sizeof(A), 1)
+int make_a_type(void)
+    int type = gc_new_type(sizeof(A), 1)
     gc_set_offset(type, 0, offsetof(A, t))
     PLf("%d, %d, %d", offsetof(A, i), offsetof(A, s), offsetof(A, t))
     return type
 
 // Singleton type object for objects of type A.
-GCType* a_type = NULL
+int a_type = 0
 
 // Creates and initializes a new instance of type A.
 A* new_a(int i, char* s, char* t)
     require_not_null(s)
     require_not_null(t)
-    require_not_null(a_type)
+    require("not 0", a_type != 0)
     A* a = gc_alloc_object(a_type)
     a->i = i
     a->s = s
@@ -68,18 +68,18 @@ struct B
     A* a // managed
 
 // B needs a type, bacause it contains one pointer to managed memory (a).
-GCType* make_b_type(void)
-    GCType* type = gc_new_type(sizeof(B), 1)
+int make_b_type(void)
+    int type = gc_new_type(sizeof(B), 1)
     gc_set_offset(type, 0, offsetof(B, a))
     return type
 
 // Singleton type object for objects of type B.
-GCType* b_type = NULL
+int b_type = 0
 
 // Creates and initializes a new instance of type B.
 B* new_b(int j, A* a)
     require_not_null(a)
-    require_not_null(b_type)
+    require("not 0", b_type != 0)
     B* b = gc_alloc_object(b_type)
     b->j = j
     b->a = a
@@ -96,13 +96,13 @@ struct Node
     Node* left // managed
     Node* right // managed
 
-GCType* make_node_type(void)
-    GCType* type = gc_new_type(sizeof(Node), 2)
+int make_node_type(void)
+    int type = gc_new_type(sizeof(Node), 2)
     gc_set_offset(type, 0, offsetof(Node, left))
     gc_set_offset(type, 1, offsetof(Node, right))
     return type
 
-GCType* node_type
+int node_type = 0
 
 Node* node(int i, Node* left, Node* right)
     Node* node = gc_alloc_object(node_type)
@@ -132,12 +132,12 @@ void __attribute__((noinline)) test0(void)
     uint64_t* p = __builtin_frame_address(0)
     PLf("value at frame address = %llx", *p)
 
-    if a_type == NULL do
+    if a_type == 0 do
         a_type = make_a_type()
-        printf("a_type = %p\n", a_type)
-    if b_type == NULL do
+        printf("a_type = %d\n", a_type)
+    if b_type == 0 do
         b_type = make_b_type()
-        printf("b_type = %p\n", b_type)
+        printf("b_type = %d\n", b_type)
 
     A* a1 = new_a(5, "hello", "world")
     print_a(a1)
@@ -171,9 +171,6 @@ void __attribute__((noinline)) test0(void)
         test_equal_i(bs[i].a->i, 5)
     ///bs = NULL; a1 = NULL
 
-    free(a_type); a_type = NULL
-    free(b_type); b_type = NULL
-
 int tree_count(Node* t)
     if t == NULL do return 0
     return tree_count(t->left) + 1 + tree_count(t->right)
@@ -198,20 +195,19 @@ int tree_sum(void)
     return n
 
 void __attribute__((noinline)) test1(void)
-    if node_type == NULL do
+    if node_type == 0 do
         node_type = make_node_type()
-        printf("node_type = %p\n", node_type)
+        printf("node_type = %d\n", node_type)
     int n = tree_sum()
     printf("n = %d\n", n)
     test_equal_i(n, 1+2+3+4+5+6+7)
     // gc_collect()
     // print_allocations()
-    free(node_type); node_type = NULL
 
 void __attribute__((noinline)) test2(void)
-    if node_type == NULL do
+    if node_type == 0 do
         node_type = make_node_type()
-        printf("node_type = %p\n", node_type)
+        printf("node_type = %d\n", node_type)
     Node* t = NULL
     for int i = 0; i < 10; i++ do
         t = node(i, t, NULL)
@@ -228,7 +224,6 @@ void __attribute__((noinline)) test2(void)
     // mark_stack(); print_allocations()
     // mark_roots(); print_allocations()
     // sweep(); print_allocations()
-    free(node_type); node_type = NULL
 
 Node* fill_tree(int i)
     if i <= 0 do
@@ -237,9 +232,9 @@ Node* fill_tree(int i)
         return node(i, fill_tree(i - 1), fill_tree(i - 2))
 
 void __attribute__((noinline)) test3(void)
-    if node_type == NULL do
+    if node_type == 0 do
         node_type = make_node_type()
-        printf("node_type = %p\n", node_type)
+        printf("node_type = %d\n", node_type)
     Node* t = NULL
     clock_t time = clock();
     //
@@ -270,7 +265,6 @@ void __attribute__((noinline)) test3(void)
     printf("time: %g ms\n", time * 1000.0 / CLOCKS_PER_SEC);
     // gc_collect();
     // print_allocations()
-    free(node_type); node_type = NULL
 
 typedef struct Node3 Node3
 struct Node3
@@ -279,17 +273,17 @@ struct Node3
     Node* b // managed
     Node3* c // managed
 
-GCType* make_node3_type(void)
-    GCType* type = gc_new_type(sizeof(Node3), 3)
+int make_node3_type(void)
+    int type = gc_new_type(sizeof(Node3), 3)
     gc_set_offset(type, 0, offsetof(Node3, a))
     gc_set_offset(type, 1, offsetof(Node3, b))
     gc_set_offset(type, 2, offsetof(Node3, c))
     return type
 
-GCType* node3_type = NULL
+int node3_type = 0
 
 Node3* node3(int x, Node* a, Node* b, Node3* c)
-    require_not_null(node3_type)
+    require("not 0", node3_type != 0)
     Node3* node = gc_alloc_object(node3_type)
     node->x = x
     node->a = a
@@ -305,12 +299,12 @@ int freed_count = 0
 int test_freed_count = 0
 
 void __attribute__((noinline)) test4(void)
-    if node_type == NULL do
+    if node_type == 0 do
         node_type = make_node_type()
-        printf("node_type = %p\n", node_type)
-    if node3_type == NULL do
+        printf("node_type = %d\n", node_type)
+    if node3_type == 0 do
         node3_type = make_node3_type()
-        printf("node3_type = %p\n", node3_type)
+        printf("node3_type = %d\n", node3_type)
 
     Node3* t = node3(1,
                    node(2,
