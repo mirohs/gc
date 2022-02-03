@@ -135,9 +135,9 @@ void test0(void)
     a2 = NULL // no more references to a2, may be garbage collected
     gc_collect() // may explicitly collect, typically not needed
     test_equal_i(gc_is_empty(), false)
-    
-int main(int argc, char* argv[])
-    gc_set_bottom_of_stack(&argv)
+
+int main(void)
+    gc_set_bottom_of_stack(__builtin_frame_address(0))
     test0()
     gc_collect()
     test_equal_i(gc_is_empty(), true)
