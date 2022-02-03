@@ -50,14 +50,13 @@ The garbage collector has the following API.
 
 ```c
 void* gc_alloc(int size);
-void* gc_alloc_object(GCType* type);
-void* gc_alloc_array(GCType* type, int count);
+void* gc_alloc_object(int type);
+void* gc_alloc_array(int type, int count);
 
 void gc_set_bottom_of_stack(void* bos);
 
-typedef struct GCType GCType;
-GCType* gc_new_type(int size, int pointer_count);
-void gc_set_offset(GCType* type, int index, int offset);
+int gc_new_type(int size, int pointer_count);
+void gc_set_offset(int type, int index, int offset);
 #define offsetof(type, member) ((int)__builtin_offsetof(type, member))
 
 void gc_add_root(void* o);
