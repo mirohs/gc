@@ -59,11 +59,19 @@ memory (to be managed by the garbage collector). The user object starts at
 offset "object".
 */
 struct Allocation
-    bool marked // set by mark (if this allocation is reachable) and cleared by sweep
     int count // number of array elements (>= 1) or 1
-    int i, j // loop state, used in mark to avoid recursion
-    GCType* type // type of the user object or NULL
+    int ij // iteration state, used in mark to avoid recursion
+           // upper 24 bits for i, lower 8 bits for j
+    uint64_t type // type of the user object or NULL, marked-bit in lowest bit
     char object[] // <-- user object starts here
+
+#define is_marked(a) (a->type & 1)
+#define set_marked(a) a->type |= 1
+#define clear_marked(a) a->type &= ~1
+#define get_type(a) (GCType*)(a->type & ~1)
+#define get_i(a) ((a->ij >> 8) & 0xffffff)
+#define get_j(a) (a->ij & 0xff)
+#define set_ij(a, i, j) a->ij = ((i << 8) | j)
 
 // The trie of all allocations.
 uint64_t allocations = 0
@@ -115,7 +123,7 @@ uint64_t* bottom_of_stack = NULL
         a = xcalloc(1, sizeof(Allocation) + type->size)
     // a->marked = false
     a->count = 1
-    a->type = type
+    a->type = (uint64_t)type
     assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
@@ -135,7 +143,7 @@ uint64_t* bottom_of_stack = NULL
         a = xcalloc(1, sizeof(Allocation) + count * type->size)
     // a->marked = false
     a->count = count
-    a->type = type
+    a->type = (uint64_t)type
     assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
     PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
@@ -171,7 +179,7 @@ uint64_t* bottom_of_stack = NULL
 // Prints the current allocations.
 bool f_print(uint64_t x)
     Allocation* a = (Allocation*)(x << 3)
-    printf("\ta = %p, o = %p, count = %d, marked = %d\n", a, a->object, a->count, a->marked)
+    printf("\ta = %p, o = %p, count = %d, marked = %llu\n", a, a->object, a->count, is_marked(a))
     return true
 void print_allocations(void)
     printf("print_allocations:\n")
@@ -188,8 +196,8 @@ size should respect the requirements of alignment, if used with arrays. The
 pointer table is initialized to zeros.
 */
 *GCType* gc_new_type(int size, int pointer_count)
-    require("not negative", size >= 0)
-    require("not negative", pointer_count >= 0)
+    require("valid range", 0 <= size && size <= 0xffffff)
+    require("valid range", 0 <= pointer_count && pointer_count <= 0xff)
     GCType* t = xcalloc(1, sizeof(GCType) + pointer_count * sizeof(int))
     t->size = size
     t->pointer_count = pointer_count
@@ -206,17 +214,20 @@ pointer table is initialized to zeros.
 Sweeps the marked allocations and either clears the mark or deletes the
 allocation.
 */
+//*int freed_count = 0
 bool f_sweep(uint64_t x)
     Allocation* a = (Allocation*)(x << 3)
-    if a->marked do
-        a->marked = false
+    if is_marked(a) do
+        clear_marked(a)
         return true // keep
     else
         PLf("free a = %p, o = %p", a, a->object)
         // printf("free a = %p, o = %p\n", a, a->object)
         free(a)
+        //freed_count++
         return false // remove
 void sweep(void)
+    //freed_count = 0
     trie_visit(&allocations, f_sweep)
 
 // Marks all allocations reachable from a, including a itself.
@@ -224,15 +235,16 @@ void mark(Allocation* a)
     PLf("frame address = %p", __builtin_frame_address(0))
     require_not_null(a)
     require("is allocation", is_alloc_aligned(a) && tr_contains(allocations, a))
-    PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, a->marked)
-    if a->marked do return
-    a->marked = true
-    GCType* t = a->type
+    PLf("marking o = %p, a = %p, count = %d, marked = %d", a->object, a, a->count, is_marked(a))
+    if is_marked(a) do return
+    set_marked(a)
+    GCType* t = get_type(a)
     if t == NULL do return
-    a->i = 0; a->j = 0
+    a->ij = 0
     Allocation* a_prev = NULL
     while a != NULL do
-        int i = a->i, j = a->j
+        int i = get_i(a)
+        int j = get_j(a)
         while i < a->count do // for all elements
             while j < t->pointer_count do // for each pointer in i-th element
                 PLf("i = %d, j = %d", i, j)
@@ -242,29 +254,33 @@ void mark(Allocation* a)
                 if pj != NULL do
                     Allocation* aj = allocation_address(pj)
                     assert("is allocation", is_alloc_aligned(aj) && tr_contains(allocations, aj))
-                    PLf("pj = %p, a = %p, count = %d, marked = %d\n", pj, aj, aj->count, aj->marked)
+                    PLf("pj = %p, a = %p, count = %d, marked = %d\n", pj, aj, aj->count, is_marked(aj))
                     // mark(aj) <-- avoid recursion, capture loop state and process aj
-                    if !aj->marked do
-                        aj->marked = true
-                        if aj->type != NULL do
+                    if !is_marked(aj) do
+                        set_marked(aj)
+                        GCType* tj = get_type(aj)
+                        if tj != NULL do
                             *ppj = (char*)a_prev
-                            a->i = i; a->j = j; a_prev = a
-                            a = aj; t = a->type
+                            set_ij(a, i, j); a_prev = a
+                            a = aj; t = tj
                             i = -1; break
                 j++
             j = 0; i++
         Allocation* aj = a
         a = a_prev
         if a != NULL do
-            t = a->type
-            int offset = t->pointers[a->j]
-            Allocation** ppj = (Allocation**)(a->object + a->i * t->size + offset)
+            t = get_type(a)
+            int i = get_i(a)
+            int j = get_j(a)
+            int offset = t->pointers[j]
+            Allocation** ppj = (Allocation**)(a->object + i * t->size + offset)
             a_prev = *ppj
             *ppj = (Allocation*)aj->object
-            a->j++
-            if a->j >= t->pointer_count do
-                a->i++
-                a->j = 0
+            j++
+            if j >= t->pointer_count do
+                i++
+                j = 0
+            set_ij(a, i, j)
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)
