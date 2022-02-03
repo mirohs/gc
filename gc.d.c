@@ -62,7 +62,6 @@ struct Allocation
     bool marked // set by mark (if this allocation is reachable) and cleared by sweep
     int count // number of array elements (>= 1) or 1
     int i, j // loop state, used in mark to avoid recursion
-    Allocation* parent // predecessor in implicit stack, used in mark to avoid recursion
     GCType* type // type of the user object or NULL
     char object[] // <-- user object starts here
 
@@ -230,15 +229,16 @@ void mark(Allocation* a)
     a->marked = true
     GCType* t = a->type
     if t == NULL do return
-    a->parent = NULL
     a->i = 0; a->j = 0
+    Allocation* a_prev = NULL
     while a != NULL do
         int i = a->i, j = a->j
         while i < a->count do // for all elements
             while j < t->pointer_count do // for each pointer in i-th element
                 PLf("i = %d, j = %d", i, j)
                 int offset = t->pointers[j]
-                char* pj = *(char**)(a->object + i * t->size + offset)
+                char** ppj = (char**)(a->object + i * t->size + offset)
+                char* pj = *ppj
                 if pj != NULL do
                     Allocation* aj = allocation_address(pj)
                     assert("is allocation", is_alloc_aligned(aj) && tr_contains(allocations, aj))
@@ -247,13 +247,24 @@ void mark(Allocation* a)
                     if !aj->marked do
                         aj->marked = true
                         if aj->type != NULL do
-                            a->i = i; a->j = j + 1; aj->parent = a
+                            *ppj = (char*)a_prev
+                            a->i = i; a->j = j; a_prev = a
                             a = aj; t = a->type
                             i = -1; break
                 j++
             j = 0; i++
-        a = a->parent
-        if a != NULL do t = a->type
+        Allocation* aj = a
+        a = a_prev
+        if a != NULL do
+            t = a->type
+            int offset = t->pointers[a->j]
+            Allocation** ppj = (Allocation**)(a->object + a->i * t->size + offset)
+            a_prev = *ppj
+            *ppj = (Allocation*)aj->object
+            a->j++
+            if a->j >= t->pointer_count do
+                a->i++
+                a->j = 0
 
 // Marks all root objects and all objects that are reachable from them.
 bool f_mark_roots(uint64_t x)
