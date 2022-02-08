@@ -180,16 +180,16 @@ void trie_size(uint64_t t, int level, int* count, int* max_level, double* mean_l
             for int i = 0; i < slot_count; i++ do
                 trie_print(node->slots[i], level + 1, i)
 
-*typedef bool (*TrieVisitFn)(uint64_t x)
+*typedef bool (*TrieVisitFn)(uint64_t x, void* context)
 
-*void trie_visit(uint64_t* t, TrieVisitFn f)
+*void trie_visit(uint64_t* t, TrieVisitFn f, void* context)
     require_not_null(t)
     require_not_null(f)
     uint64_t x = *t
     if x != 0 do
         if is_value(x) do
             // x is a value (LSB clear)
-            bool keep = f(x)
+            bool keep = f(x, context)
             if !keep do *t = 0
         else
             assert("valid node", is_node(x) && !is_empty(x))
@@ -199,7 +199,7 @@ void trie_size(uint64_t t, int level, int* count, int* max_level, double* mean_l
             int j = 0, n = 0
             for int i = 0; i < slot_count; i++ do
                 if slots[i] != 0 do
-                    trie_visit(slots + i, f)
+                    trie_visit(slots + i, f, context)
                     if slots[i] != 0 do
                         j = i
                         n++
