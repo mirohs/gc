@@ -236,7 +236,7 @@ void __attribute__((noinline)) test3(void)
         node_type = make_node_type()
         printf("node_type = %d\n", node_type)
     Node* t = NULL
-    clock_t time = clock();
+    clock_t time = clock()
     //
     for int i = 0; i < 10000000; i++ do
         t = node(i, t, NULL)
@@ -246,8 +246,9 @@ void __attribute__((noinline)) test3(void)
             gc_collect()
     //
     //t = fill_tree(24)
-    time = clock() - time;
-    printf("time: %g ms\n", time * 1000.0 / CLOCKS_PER_SEC);
+    time = clock() - time
+    printf("time: %g ms\n", time * 1000.0 / CLOCKS_PER_SEC)
+    gc_print_stats()
     /*
     int count = 0; int max_level = 0; double mean_level = 0
     trie_size(allocations, 0, &count, &max_level, &mean_level)
@@ -259,10 +260,10 @@ void __attribute__((noinline)) test3(void)
     t = NULL
     // gc_add_root(t)
     // print_allocations()
-    time = clock();
+    time = clock()
     gc_collect()
-    time = clock() - time;
-    printf("time: %g ms\n", time * 1000.0 / CLOCKS_PER_SEC);
+    time = clock() - time
+    printf("time: %g ms\n", time * 1000.0 / CLOCKS_PER_SEC)
     // gc_collect();
     // print_allocations()
 
@@ -386,6 +387,7 @@ int main(void)
     test3()
     gc_collect()
     test_equal_i(gc_is_empty(), true)
+    gc_print_stats()
     test4()
     gc_collect()
     printf("freed %d objects\n", test_freed_count)
