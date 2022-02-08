@@ -15,9 +15,9 @@
 
 /*
 Macros for trie functions (see trie.h). The four least significant bits of
-pointers to dynamically allocated memory are zero. A value in the trie must
-have the LSB clear. Thus the pointer value can be shifted right by three
-bits. The LSB of the result is still zero.
+pointers to dynamically allocated memory are zero, because such memory is
+16-byte aligned. A value in the trie must have the LSB clear. Thus the pointer
+value can be shifted right by three bits. The LSB of the result is still zero.
 */
 #define tr_insert(t, x) trie_insert(t, (uint64_t)(x) >> 3, 0)
 #define tr_contains(t, x) trie_contains(t, (uint64_t)(x) >> 3, 0)
@@ -28,10 +28,10 @@ bits. The LSB of the result is still zero.
 
 /*
 The user sees the "object" member within the allocation structure. This macro
-computes the address of the allocation object given the address of the user
-object.
+computes the address of the allocation header given the address of the user
+object. The allocation header directly precedes the user object in memory.
 */
-#define allocation_address(o) ((Allocation*)((char*)(o) - offsetof(Allocation, object)))
+#define allocation_address(o) ((Allocation*)(o) - 1)
 
 // Checks whether a is not NULL and 16-byte aligned.
 #define is_alloc_aligned(a) ((a) != NULL && ((uint64_t)(a) & 0xf) == 0)
@@ -43,24 +43,27 @@ typedef struct Allocation Allocation
 
 /*
 Type describes an object in terms of its size and in terms of the offsets of
-pointers to dynamically allocated (and managed) memory that it contains.
+pointers to managed dynamically allocated memory that the object contains. Such
+pointers may only point to the user object of an allocation and not in the
+middle of a user object.
 */
 struct Type
     int size // byte size of an object of this type
-    int pointer_count // number of pointers that an object of this type contains
-    int pointers[] // byte offsets of pointers
+    int pointer_count // number of managed pointers that an object of this type contains
+    int pointers[] // byte offsets of managed pointers
 
 /*
 Allocation represents the header of a single memory block that is allocated for
-management by this garbage collector. If the user object is an array, then count
->= 1, otherwise count == 1. The type attribute is the type of the user object or
-NULL if the user object does not contain any pointers to dynamically allocated
-memory (to be managed by the garbage collector). The user object starts at
-offset "object".
+management by this garbage collector. The allocation header directly precedes
+the user object. If type != 0 then type represents the index into the types
+array and count represents the number of instances of the type (1 for single
+objects, >=1 for arrays). If type == 0 then this allocation does not use a type
+(and hence does not contain managed pointers) and count is the byte size of the
+user object. The user object starts at offset "object".
 */
 struct Allocation
-    int count_type_marked // 24 bits count (number of array elements (>= 1) or 1)
-                          // middle 7 bits type (at most 127 types), LSB mark
+    int count_type_marked // 24 bits: count (byte size (for type == 0) or number of type instances)
+                          // middle 7 bits: type (at most 127 types), 1 bit (LSB): marked
     int i_j // iteration state, used in mark function to avoid recursion
            // upper 24 bits for i (element index), lower 8 bits for j (pointer index)
     char object[] // <-- user object starts here
@@ -75,6 +78,7 @@ struct Allocation
 #define get_type(a) ((a->count_type_marked >> 1) & 0x7f)
 #define set_count_type(a, count, type) a->count_type_marked = ((count << 8) | (type << 1))
 
+// Pointers to type objects. Allocations store indices into the types array.
 Type* types[0x80]
 int types_count = 0
 
@@ -84,75 +88,85 @@ uint64_t allocations = 0
 // The trie of root allocations.
 uint64_t roots = 0
 
+// Allocation statistics. Used to decide when to trigger a collection before an allocation.
+uint64_t allocations_count = 0
+uint64_t allocations_size = 0
+#define COUNT_THRESHOLD_MIN (1024 * 1024)
+#define SIZE_THRESHOLD_MIN (16 * COUNT_THRESHOLD_MIN)
+uint64_t count_threshold = COUNT_THRESHOLD_MIN
+uint64_t size_threshold = SIZE_THRESHOLD_MIN
+uint64_t collections_count = 0
+
+// Returns the number of bytes of the user part of the allocation.
+int allocation_size(Allocation* a)
+    require_not_null(a)
+    int type_index = get_type(a)
+    if type_index == 0 do return get_count(a)
+    Type* type = types[type_index]
+    return type->size * get_count(a)
+
+// Prints statistics about the garbage collector.
+*void gc_print_stats(void)
+    printf("allocations = %llu, bytes = %llu, count_threshold = %llu, size_threshold = %llu, collections = %llu\n",
+            allocations_count, allocations_size, count_threshold, size_threshold, collections_count)
+
 /*
 The bottom of the call stack is set in the initialization (or main) function.
 Needed for scanning the stack.
 */
 uint64_t* bottom_of_stack = NULL
 
+/*
+Sets the bottom of the call stack. Called like this:
+gc_set_bottom_of_stack(__builtin_frame_address(0))
+*/
 *void gc_set_bottom_of_stack(void* bos)
     require_not_null(bos)
     require("aligned pointer", ((uint64_t)bos & 7) == 0)
     bottom_of_stack = bos
 
-// Allocates the given number of bytes.
-*void* gc_alloc(int size)
-    require("not negative", size >= 0)
+// Allocates count objects of the given type.
+void* alloc(int type, int count)
+    require("valid range", 0 <= type && type <= types_count)
+    require("valid range", 0 < count && count <= 0xffffff)
+    if allocations_count >= count_threshold || allocations_size >= size_threshold do
+        gc_collect()
+    int size = count
+    if type > 0 do size *= types[type]->size
     Allocation* a = calloc(1, sizeof(Allocation) + size)
-    // gc_collect() // stress test collection
     if a == NULL do
         // if could not get memory, collect and try again
         gc_collect()
         // use xcalloc here to stop if fails again
         a = xcalloc(1, sizeof(Allocation) + size)
-    set_count_type(a, 1, 0) // count, type
+    set_count_type(a, count, type)
     assert("is aligned", is_alloc_aligned(a))
     tr_insert(&allocations, a)
-    PLf("a = %p, o = %p, type = %p", a, a->object, a->type)
+    allocations_count++
+    allocations_size += size
+    PLf("a = %p, o = %p, type = %p", a, a->object, types[type])
     ensure("inserted", tr_contains(allocations, a))
     return a->object
+
+// Allocates the given number of bytes.
+*void* gc_alloc(int size)
+    require("valid range", 0 < size && size <= 0xffffff)
+    return alloc(0, size)
 
 // Allocates an object of the given type.
 *void* gc_alloc_object(int type)
     require("valid type", 1 <= type && type <= types_count)
-    int size = types[type]->size
-    Allocation* a = calloc(1, sizeof(Allocation) + size)
-    // stress test collection
-    // static int counter = 0
-    // counter++; if (counter % 11) == 1 do gc_collect()
-    if a == NULL do
-        // if could not get memory, collect and try again
-        gc_collect()
-        // use xcalloc here to stop if fails again
-        a = xcalloc(1, sizeof(Allocation) + size)
-    set_count_type(a, 1, type)
-    assert("is aligned", is_alloc_aligned(a))
-    tr_insert(&allocations, a)
-    PLf("a = %p, o = %p, type = %p", a, a->object, types[type])
-    ensure("inserted", tr_contains(allocations, a))
-    return a->object
+    return alloc(type, 1)
 
 // Allocates an array of count objects of the given type.
 *void* gc_alloc_array(int type, int count)
     require("valid type", 1 <= type && type <= types_count)
-    require("positive", count > 0)
-    int size = types[type]->size
-    Allocation* a = calloc(1, sizeof(Allocation) + count * size)
-    // gc_collect() // stress test collection
-    if a == NULL do
-        // if could not get memory, collect and try again
-        gc_collect()
-        // use xcalloc here to stop if fails again
-        a = xcalloc(1, sizeof(Allocation) + count * size)
-    // a->marked = false
-    set_count_type(a, count, type)
-    assert("is aligned", is_alloc_aligned(a))
-    tr_insert(&allocations, a)
-    PLf("a = %p, o = %p, type = %p", a, a->object, types[type])
-    ensure("inserted", tr_contains(allocations, a))
-    return a->object
+    require("valid range", 0 < count && count <= 0xffffff)
+    return alloc(type, count)
 
+// Checks if the garbge collector has any allocations.
 *bool gc_is_empty(void)
+    assert("valid state", trie_is_empty(allocations) == (allocations_count == 0))
     return trie_is_empty(allocations)
 
 // Checks if the set of roots contains o.
@@ -179,7 +193,7 @@ uint64_t* bottom_of_stack = NULL
     ensure("is not a root", !tr_contains(roots, a))
 
 // Prints the current allocations.
-bool f_print(uint64_t x)
+bool f_print(uint64_t x, void* context)
     Allocation* a = (Allocation*)(x << 3)
     printf("\ta = %p, o = %p, count = %d, marked = %d\n", a, a->object, get_count(a), is_marked(a))
     return true
@@ -188,7 +202,7 @@ void print_allocations(void)
     if trie_is_empty(allocations) do
         printf("\tno allocations\n")
     else
-        trie_visit(&allocations, f_print)
+        trie_visit(&allocations, f_print, NULL)
 
 /*
 Allocates a new type with the given size of the user object and the given number
@@ -201,6 +215,7 @@ pointer table is initialized to zeros.
     require("types not full", types_count < 0x7f)
     require("not negative", size >= 0)
     require("valid range", 0 <= pointer_count && pointer_count <= 0xff)
+    require("valid size for number of pointers", pointer_count * sizeof(void*) <= size)
     Type* t = xcalloc(1, sizeof(Type) + pointer_count * sizeof(int))
     t->size = size
     t->pointer_count = pointer_count
@@ -220,21 +235,30 @@ pointer table is initialized to zeros.
 Sweeps the marked allocations and either clears the mark or deletes the
 allocation.
 */
-//*int freed_count = 0
-bool f_sweep(uint64_t x)
+typedef struct {uint64_t count, size;} CountSize
+bool f_sweep(uint64_t x, void* context)
     Allocation* a = (Allocation*)(x << 3)
     if is_marked(a) do
         clear_marked(a)
         return true // keep
     else
         PLf("free a = %p, o = %p", a, a->object)
-        // printf("free a = %p, o = %p\n", a, a->object)
+        CountSize* freed = context
+        freed->count++
+        freed->size += allocation_size(a)
         free(a)
-        //freed_count++
         return false // remove
-void sweep(void)
-    //freed_count = 0
-    trie_visit(&allocations, f_sweep)
+void __attribute__((noinline)) sweep(void)
+    CountSize freed = {0, 0}
+    ensure_code(uint64_t count_old = allocations_count)
+    ensure_code(uint64_t size_old = allocations_size)
+    trie_visit(&allocations, f_sweep, &freed)
+    allocations_count -= freed.count
+    allocations_size -= freed.size
+    PLf("freed.count = %llu, freed.size = %llu, allocs.count = %llu, allocs.size = %llu\n",
+            freed.count, freed.size, allocations_count, allocations_size)
+    ensure("not larger", allocations_count <= count_old)
+    ensure("not larger", allocations_size <= size_old)
 
 // Marks all allocations reachable from a, including a itself.
 void mark(Allocation* a)
@@ -289,13 +313,13 @@ void mark(Allocation* a)
             set_i_j(a, i, j)
 
 // Marks all root objects and all objects that are reachable from them.
-bool f_mark_roots(uint64_t x)
+bool f_mark_roots(uint64_t x, void* context)
     PLf("%llx", x << 3)
     Allocation* r = (Allocation*)(x << 3)
     mark(r)
     return true // keep
 void mark_roots(void)
-    trie_visit(&roots, f_mark_roots)
+    trie_visit(&roots, f_mark_roots, NULL)
 
 /*
 Marks registers and returns its own frame address. mark_registers has its own
@@ -372,11 +396,18 @@ be called manually by clients.
 */
 *void gc_collect(void)
     PLf("frame address = %p", __builtin_frame_address(0))
+    PLf("cc = %llu, ac = %llu, ct = %llu, st = %llu\n", collections_count, allocations_count, count_threshold, size_threshold)
     mark_stack()
     mark_roots()
     // PL; print_allocations()
     sweep()
     // PL; print_allocations()
+    collections_count++
+    //time_since_collection = 0
+    count_threshold = 2 * allocations_count
+    if count_threshold < COUNT_THRESHOLD_MIN do count_threshold = COUNT_THRESHOLD_MIN
+    size_threshold = 2 * allocations_size
+    if size_threshold < SIZE_THRESHOLD_MIN do size_threshold = SIZE_THRESHOLD_MIN
 
 void test_alignment(void)
     // test address alignment on the stack
